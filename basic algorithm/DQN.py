@@ -23,7 +23,6 @@ NUM_STATES = env.observation_space.shape[0]
 ENV_A_SHAPE = 0 if isinstance(env.action_space.sample(), int) else env.action_space.sample.shape
 
 class Net(nn.Module):
-    """docstring for Net"""
     def __init__(self):
         super(Net, self).__init__()
         self.fc1 = nn.Linear(NUM_STATES, 50)
@@ -41,6 +40,7 @@ class Net(nn.Module):
         action_prob = self.out(x)
         return action_prob
 
+    
 class DQN():
     """docstring for DQN"""
     def __init__(self):
@@ -111,8 +111,6 @@ def main():
     episodes = 400
     print("Collecting Experience....")
     reward_list = []
-    plt.ion()
-    fig, ax = plt.subplots()
     writer = SummaryWriter()
     for i in range(episodes):
         state = env.reset()
