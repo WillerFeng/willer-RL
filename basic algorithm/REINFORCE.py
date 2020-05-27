@@ -1,5 +1,3 @@
-# MountainCar V0
-
 import numpy as np
 import gym
 import matplotlib.pyplot as plt
@@ -11,6 +9,7 @@ from torch.nn import functional as F
 from torch.optim import adam
 from torch.distributions import Categorical
 from tensorboardX import SummaryWriter
+
 env = gym.make('MountainCar-v0')
 env = env.unwrapped
 env.seed(1)

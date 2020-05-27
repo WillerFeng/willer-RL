@@ -7,47 +7,66 @@ import matplotlib.pyplot as plt
 import copy
 from tensorboardX import SummaryWriter
 from collections import namedtuple
-from common import wrap_deepmind, ReplayBuffer
 
-BATCH_SIZE = 128
+
+BATCH_SIZE = 256
 LR = 0.01
-GAMMA = 0.90
+GAMMA = 0.95
 EPSILON = 0.9
-MEMORY_CAPACITY = 20000
+Q_MEMORY_CAPACITY = 40000
+T_MEMORY_CAPACITY = 10000
 Q_NETWORK_ITERATION = 100
 render = False
 
 env = gym.make("Breakout-v0")
 env = env.unwrapped
-env = wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=True, scale=True)
+env = wrap_deepmind(env, episode_life=False, clip_rewards=True, swap_axis=True, frame_stack=True, scale=True)
 NUM_ACTIONS = env.action_space.n
 
-class Net(nn.Module):
+class ConvNet(nn.Module):
     def __init__(self, in_channels=4, num_actions=18):
         
-        super(Net, self).__init__()
+        super(ConvNet, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-        self.fc4 = nn.Linear(7 * 7 * 64, 512)
-        self.fc5 = nn.Linear(512, num_actions)
+        self.fc_q1 = nn.Linear(7 * 7 * 64, 512)
+        self.fc_q2 = nn.Linear(512, num_actions)
+        
+        self.fc_t1 = nn.Linear(7 * 7 * 64, 512)
+        self.fc_t2 = nn.Linear(512, num_actions)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
-        x = F.relu(self.fc4(x.view(x.size(0), -1)))
-        return self.fc5(x)
+        x = x.view(x.size(0), -1)
+        q_value = self.fc_q2(F.relu(self.fc_q1(x)))
+        t_value = self.fc_t2(F.relu(self.fc_t1(x)))
+        return q_value, t_value
 
+class Net(nn.Module):
+    def __init__(self, num_actions):
+        super(Net, self).__init__()
+        self.fc1 = nn.Linear(4, 64)
+        self.fc_q = nn.Linear(64, num_actions)
+        self.fc_t = nn.Linear(64, num_actions)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        q_value = self.fc_q(x)
+        t_value = self.fc_t(x)
+        return q_value, t_value
     
 class DQN():
     def __init__(self):
         
         super(DQN, self).__init__()
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.eval_net   = Net(num_actions=NUM_ACTIONS).to(self.device)
-        self.target_net = Net(num_actions=NUM_ACTIONS).to(self.device)
-        self.memory    = ReplayBuffer(MEMORY_CAPACITY)
+        self.eval_net   = ConvNet(num_actions=NUM_ACTIONS).to(self.device)
+        self.target_net = ConvNet(num_actions=NUM_ACTIONS).to(self.device)
+        self.q_memory   = ReplayBuffer(Q_MEMORY_CAPACITY)
+        self.t_memory   = ReplayBuffer(T_MEMORY_CAPACITY)
         self.optimizer = torch.optim.Adam(self.eval_net.parameters(), lr=LR)
         self.loss_func = nn.MSELoss()
         self.learn_step_counter = 0
@@ -56,36 +75,52 @@ class DQN():
         
         if np.random.randn() <= EPSILON:
             state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            action_value = self.eval_net.forward(state)
-            action = torch.max(action_value, 1)[1].cpu().numpy()
+            q_value, t_value = self.eval_net.forward(state)
+            action = torch.max(q_value + t_value, 1)[1].cpu().numpy()
             action = action[0] 
         else:
-            action = np.random.randint(0,NUM_ACTIONS)
+            action = np.random.randint(0, NUM_ACTIONS)
         return action
 
 
     def store_transition(self, state, action, reward, next_state, done):
-        self.memory.add(state, action, reward, next_state, done)
+        if done:
+            self.t_memory.add(state, action, reward, next_state, done)
+        else:
+            self.q_memory.add(state, action, reward, next_state, done)
 
 
     def learn(self):
 
-        #update the parameters
         if self.learn_step_counter % Q_NETWORK_ITERATION ==0:
             self.target_net.load_state_dict(self.eval_net.state_dict())
-        self.learn_step_counter+=1
 
-        #sample batch from memory
-        batch_state, batch_action, batch_reward, batch_next_state, _ = self.memory.sample(BATCH_SIZE)
+        self.learn_step_counter+=1
+        batch_state, batch_action, batch_reward, batch_next_state, _ = self.q_memory.sample(BATCH_SIZE)
         batch_state  = torch.FloatTensor(batch_state).to(self.device)
         batch_action = torch.LongTensor(batch_action).view(-1, 1).to(self.device)
         batch_reward = torch.FloatTensor(batch_reward).view(-1, 1).to(self.device)
         batch_next_state = torch.FloatTensor(batch_next_state).to(self.device)
-        #q_eval
-        q_eval = self.eval_net(batch_state).gather(1, batch_action)
-        q_next = self.target_net(batch_next_state).detach()
+        
+        q_eval, t_eval   = self.eval_net(batch_state)
+        q_eval.gather(1, batch_action)
+        q_next, t_next   = self.target_net(batch_next_state)
+        q_next.detach()
         q_target = batch_reward + GAMMA * q_next.max(1)[0].view(BATCH_SIZE, 1)
         loss = self.loss_func(q_eval, q_target)
+        
+        
+        
+        batch_state, batch_action, batch_reward, batch_next_state, _ = self.t_memory.sample(BATCH_SIZE)
+        batch_state  = torch.FloatTensor(batch_state).to(self.device)
+        batch_action = torch.LongTensor(batch_action).view(-1, 1).to(self.device)
+        batch_reward = torch.FloatTensor(batch_reward).view(-1, 1).to(self.device)
+        
+        q_eval, t_eval   = self.eval_net(batch_state)
+        t_eval.gather(1, batch_action)
+        t_target = batch_reward
+        loss = self.loss_func(t_eval, t_target)
+
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -94,7 +129,7 @@ class DQN():
 
 def main():
     dqn = DQN()
-    episodes = 600
+    episodes = 2000
     print("Collecting Experience....")
     writer = SummaryWriter()
     for i in range(episodes):
@@ -108,15 +143,14 @@ def main():
         
             dqn.store_transition(state, action, reward, next_state, done)
             ep_reward += reward
-
             if done:
                 break
             state = next_state
-        if len(dqn.memory) >= BATCH_SIZE:
+        if len(dqn.q_memory) >= BATCH_SIZE:
             dqn.learn()
-        if i % 25 == 0:
+        if i % 100 == 0:
             print("episode: {} , the episode reward is {}".format(i, round(ep_reward, 3)))
-        writer.add_scalar("reward" , reward, i)
+        writer.add_scalar("reward", ep_reward, i)
         
 
 if __name__ == '__main__':

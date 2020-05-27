@@ -14,4 +14,6 @@
 
 
 ### improvement trick
-- terminal boost
+- DB-DQN
+
+### Knowledge
