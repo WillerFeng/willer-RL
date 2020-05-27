@@ -26,12 +26,12 @@ class ReplayBuffer(object):
         for i in idxes:
             data = self._storage[i]
             obs_t, action, reward, obs_tp1, done = data
-            obses_t.append(obs_t)
-            actions.append(action)
+            obses_t.append(np.array(obs_t, copy=False))
+            actions.append(np.array(action, copy=False))
             rewards.append(reward)
-            obses_tp1.append(obs_tp1)
+            obses_tp1.append(np.array(obs_tp1, copy=False))
             dones.append(done)
-        return torch.FloatTensor(obses_t), torch.LongTensor(actions), torch.FloatTensor(rewards), torch.FloatTensor(obses_tp1), torch.FloatTensor(dones)
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
         
     def sample(self, batch_size):
         idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
