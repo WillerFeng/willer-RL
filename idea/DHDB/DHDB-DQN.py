@@ -8,9 +8,8 @@ import copy
 from tensorboardX import SummaryWriter
 from collections import namedtuple
 
-
 BATCH_SIZE = 256
-LR = 0.01
+LR = 0.001
 GAMMA = 0.95
 EPSILON = 0.9
 Q_MEMORY_CAPACITY = 40000
@@ -103,10 +102,11 @@ class DQN():
         batch_next_state = torch.FloatTensor(batch_next_state).to(self.device)
         
         q_eval, t_eval   = self.eval_net(batch_state)
-        q_eval.gather(1, batch_action)
+        q_eval = q_eval.gather(1, batch_action)
         q_next, t_next   = self.target_net(batch_next_state)
         q_next.detach()
-        q_target = batch_reward + GAMMA * q_next.max(1)[0].view(BATCH_SIZE, 1)
+        t_next.detach()
+        q_target = batch_reward + GAMMA * (q_next + t_next).max(1)[0].view(BATCH_SIZE, 1)
         loss = self.loss_func(q_eval, q_target)
         
         
@@ -117,7 +117,7 @@ class DQN():
         batch_reward = torch.FloatTensor(batch_reward).view(-1, 1).to(self.device)
         
         q_eval, t_eval   = self.eval_net(batch_state)
-        t_eval.gather(1, batch_action)
+        t_eval = t_eval.gather(1, batch_action)
         t_target = batch_reward
         loss = self.loss_func(t_eval, t_target)
 
@@ -126,12 +126,20 @@ class DQN():
         loss.backward()
         self.optimizer.step()
 
+        if self.learn_step_counter == 4000:
+            self.epsilon = 0.3
+        if self.learn_step_counter == 8000:
+            self.epsilon = 0.6
+        if self.learn_step_counter == 12000:
+            self.epsilon = 0.99
+
 
 def main():
     dqn = DQN()
-    episodes = 2000
+    episodes = 15000
     print("Collecting Experience....")
     writer = SummaryWriter()
+    avg_reward = 0
     for i in range(episodes):
         state = env.reset()
         ep_reward = 0
@@ -143,18 +151,23 @@ def main():
         
             dqn.store_transition(state, action, reward, next_state, done)
             ep_reward += reward
+
             if done:
                 break
             state = next_state
         if len(dqn.q_memory) >= BATCH_SIZE:
             dqn.learn()
-        if i % 100 == 0:
-            print("episode: {} , the episode reward is {}".format(i, round(ep_reward, 3)))
-        writer.add_scalar("reward", ep_reward, i)
-        
+        avg_reward += ep_reward
+        if i % 200 == 0:
+            print("episode: {} , the average reward is {:.3f}".format(i, avg_reward/200))
+            avg_reward = 0
+        writer.add_scalar("reward/ep_reward" , ep_reward, i)
+        writer.add_scalar("reward/avg_reward" , avg_reward, i)
+    print("Finish")
 
 if __name__ == '__main__':
     main()
+
 
 
 
