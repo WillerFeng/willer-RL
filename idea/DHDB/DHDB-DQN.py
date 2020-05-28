@@ -69,10 +69,11 @@ class DQN():
         self.optimizer = torch.optim.Adam(self.eval_net.parameters(), lr=LR)
         self.loss_func = nn.MSELoss()
         self.learn_step_counter = 0
-
+        self.epsilon = 0.1
+        
     def choose_action(self, state):
         
-        if np.random.randn() <= EPSILON:
+        if np.random.randn() <= self.epsilon:
             state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             q_value, t_value = self.eval_net.forward(state)
             action = torch.max(q_value + t_value, 1)[1].cpu().numpy()
@@ -90,11 +91,30 @@ class DQN():
 
 
     def learn(self):
-
+        """
+        Add Shrink to Q and T (to do)
+        """
         if self.learn_step_counter % Q_NETWORK_ITERATION ==0:
             self.target_net.load_state_dict(self.eval_net.state_dict())
 
         self.learn_step_counter+=1
+        
+        # Update Terminal Estimation
+        batch_state, batch_action, batch_reward, batch_next_state, _ = self.t_memory.sample(BATCH_SIZE)
+        batch_state  = torch.FloatTensor(batch_state).to(self.device)
+        batch_action = torch.LongTensor(batch_action).view(-1, 1).to(self.device)
+        batch_reward = torch.FloatTensor(batch_reward).view(-1, 1).to(self.device)
+        
+        q_eval, t_eval = self.eval_net(batch_state)
+        t_eval = t_eval.gather(1, batch_action)
+        t_target = batch_reward
+        loss = self.loss_func(t_eval, t_target)
+        
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+        # Update Q Estimation
         batch_state, batch_action, batch_reward, batch_next_state, _ = self.q_memory.sample(BATCH_SIZE)
         batch_state  = torch.FloatTensor(batch_state).to(self.device)
         batch_action = torch.LongTensor(batch_action).view(-1, 1).to(self.device)
@@ -109,18 +129,6 @@ class DQN():
         q_target = batch_reward + GAMMA * (q_next + t_next).max(1)[0].view(BATCH_SIZE, 1)
         loss = self.loss_func(q_eval, q_target)
         
-        
-        
-        batch_state, batch_action, batch_reward, batch_next_state, _ = self.t_memory.sample(BATCH_SIZE)
-        batch_state  = torch.FloatTensor(batch_state).to(self.device)
-        batch_action = torch.LongTensor(batch_action).view(-1, 1).to(self.device)
-        batch_reward = torch.FloatTensor(batch_reward).view(-1, 1).to(self.device)
-        
-        q_eval, t_eval   = self.eval_net(batch_state)
-        t_eval = t_eval.gather(1, batch_action)
-        t_target = batch_reward
-        loss = self.loss_func(t_eval, t_target)
-
 
         self.optimizer.zero_grad()
         loss.backward()
