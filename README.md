@@ -14,7 +14,8 @@
 - FuN() (to work)
 
 ### improvement trick
-- DB-DQN: Have better performance in Actor-Critic method
+###### DHDB-DQN
+Have better performance in Actor-Critic method, If the termination state is not handled correctly, it can lead to serious policy degradation.
 
 ### Knowledge  
 
