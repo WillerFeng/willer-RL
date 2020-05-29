@@ -11,9 +11,11 @@
 ### Paper Algorithm
 - ICM(Intrinsic Curiosity Model) (to work)
 - RND(Random Network Distillation) (to work)
-
+- FuN() (to work)
 
 ### improvement trick
-- DB-DQN
+- DB-DQN: Have better performance in Actor-Critic method
 
-### Knowledge
+### Knowledge  
+
+    Thank to OpenAI Baselines

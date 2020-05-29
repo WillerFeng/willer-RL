@@ -1,6 +1,6 @@
 import gym, os
 import numpy as np
-
+import datetime
 from itertools import count
 from collections import namedtuple
 
@@ -27,7 +27,7 @@ learning_rate = 0.01
 gamma = 0.99
 render = False
 eps = np.finfo(np.float32).eps.item()
-SavedAction = namedtuple('SavedAction', ['log_prob', 'value'])
+SavedAction = namedtuple('SavedAction', ['log_prob', 'q_value', 't_value'])
 
 
 class Policy(nn.Module):
@@ -36,17 +36,19 @@ class Policy(nn.Module):
         self.fc1 = nn.Linear(state_space, 32)
 
         self.action_head = nn.Linear(32, action_space)
-        self.value_head = nn.Linear(32, 1) # Scalar Value
-
+        self.q_value_head = nn.Linear(32, 1) # Scalar Value
+        self.t_value_head = nn.Linear(32, 1)
+        
         self.save_actions = []
         self.rewards = []
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
         action_score = self.action_head(x)
-        state_value = self.value_head(x)
+        q_state_value = self.q_value_head(x)
+        t_state_value = self.t_value_head(x)
 
-        return F.softmax(action_score, dim=-1), state_value
+        return F.softmax(action_score, dim=-1), q_state_value, t_state_value
 
 model = Policy()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -54,10 +56,10 @@ optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
 def select_action(state):
     state = torch.from_numpy(state).float()
-    probs, state_value = model(state)
+    probs, q_state_value, t_state_value = model(state)
     m = Categorical(probs)
     action = m.sample()
-    model.save_actions.append(SavedAction(m.log_prob(action), state_value))
+    model.save_actions.append(SavedAction(m.log_prob(action), q_state_value, t_state_value))
 
     return action.item()
 
@@ -66,33 +68,40 @@ def finish_episode():
     R = 0
     save_actions = model.save_actions
     policy_loss = []
-    value_loss = []
+    q_value_loss = []
     rewards = []
 
+    
     for r in model.rewards[::-1]:
         R = r + gamma * R
         rewards.insert(0, R)
 
     rewards = torch.tensor(rewards)
     rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
-
-    for (log_prob , value), r in zip(save_actions, rewards):
-        reward = r - value.item()
+    
+    
+    t_value_loss = F.mse_loss(torch.Tensor([model.rewards[-1]]), torch.Tensor([model.save_actions[-1].t_value]))
+                              
+    for (log_prob , q_value, t_value), r in zip(save_actions, rewards):
+    
+        reward = r - (q_value.item() + t_value.item())
         policy_loss.append(-log_prob * reward)
-        value_loss.append(F.smooth_l1_loss(value, torch.tensor([r])))
+        q_value_loss.append(F.smooth_l1_loss(q_value, torch.tensor([r])))
+        
 
     optimizer.zero_grad()
-    loss = torch.stack(policy_loss).sum() + torch.stack(value_loss).sum()
+    loss = torch.stack(policy_loss).sum() + torch.stack(q_value_loss).sum() + t_value_loss
     loss.backward()
     optimizer.step()
 
     del model.rewards[:]
     del model.save_actions[:]
 
+    
 def main():
     running_reward = 10
     live_time = []
-    writer = SummaryWriter()
+    writer = SummaryWriter("runs/DHDB-AC_"+str(datetime.datetime.now()))
     episodes = 300
     for i_episode in range(episodes):
         state = env.reset()
