@@ -14,8 +14,11 @@
 - FuN() (to work)
 
 ### improvement trick
-###### DHDB-DQN
+###### TE-DQN (terminal estimation)
 Have better performance in Actor-Critic method, If the termination state is not handled correctly, it can lead to serious policy degradation.
+###### MH-DQN (multi head estimation)
+Having a similar learning machism like bagging
+
 
 ### Knowledge  
 
