@@ -5,27 +5,34 @@ import numpy as np
 import gym
 import matplotlib.pyplot as plt
 import copy
+import datetime
 from tensorboardX import SummaryWriter
+from itertools import count
 from collections import namedtuple
-from common import wrap_deepmind, ReplayBuffer
 
-BATCH_SIZE = 128
-LR = 0.01
-GAMMA = 0.90
-EPSILON = 0.9
-MEMORY_CAPACITY = 20000
+#from common import wrap_deepmind, ReplayBuffer
+
+env.seed(1)
+torch.manual_seed(1)
+
+
+BATCH_SIZE = 256
+LR = 0.001
+GAMMA = 1
+
+MEMORY_CAPACITY = 40000
 Q_NETWORK_ITERATION = 100
 render = False
 
-env = gym.make("Breakout-v0")
+env = gym.make("CartPole-v0")
 env = env.unwrapped
-env = wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=True, scale=True)
+#env = wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=True, scale=True)
 NUM_ACTIONS = env.action_space.n
 
-class Net(nn.Module):
+class ConvNet(nn.Module):
     def __init__(self, in_channels=4, num_actions=18):
         
-        super(Net, self).__init__()
+        super(ConvNet, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
@@ -39,6 +46,16 @@ class Net(nn.Module):
         x = F.relu(self.fc4(x.view(x.size(0), -1)))
         return self.fc5(x)
 
+class Net(nn.Module):
+    def __init__(self, num_actions):
+        super(Net, self).__init__()
+        self.fc1 = nn.Linear(4, 64)
+        self.fc_q = nn.Linear(64, num_actions)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        q_value = self.fc_q(x)
+        return q_value
     
 class DQN():
     def __init__(self):
@@ -51,10 +68,11 @@ class DQN():
         self.optimizer = torch.optim.Adam(self.eval_net.parameters(), lr=LR)
         self.loss_func = nn.MSELoss()
         self.learn_step_counter = 0
+        self.epsilon = 0.1
 
     def choose_action(self, state):
         
-        if np.random.randn() <= EPSILON:
+        if np.random.randn() <= self.epsilon:
             state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             action_value = self.eval_net.forward(state)
             action = torch.max(action_value, 1)[1].cpu().numpy()
@@ -81,6 +99,7 @@ class DQN():
         batch_action = torch.LongTensor(batch_action).view(-1, 1).to(self.device)
         batch_reward = torch.FloatTensor(batch_reward).view(-1, 1).to(self.device)
         batch_next_state = torch.FloatTensor(batch_next_state).to(self.device)
+        
         #q_eval
         q_eval = self.eval_net(batch_state).gather(1, batch_action)
         q_next = self.target_net(batch_next_state).detach()
@@ -90,17 +109,24 @@ class DQN():
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-
+        
+        if self.learn_step_counter == 100:
+            self.epsilon = 0.3
+        if self.learn_step_counter == 200:
+            self.epsilon = 0.6
+        if self.learn_step_counter == 300:
+            self.epsilon = 0.99
 
 def main():
     dqn = DQN()
-    episodes = 600
+    episodes = 500
     print("Collecting Experience....")
-    writer = SummaryWriter()
+    writer = SummaryWriter("runs/Baseline-DQN_"+str(datetime.datetime.now()))
     for i in range(episodes):
         state = env.reset()
         ep_reward = 0
-        while True:
+        t = 0
+        for t in count():
             if render:
                 env.render()
             action = dqn.choose_action(state)
@@ -109,14 +135,13 @@ def main():
             dqn.store_transition(state, action, reward, next_state, done)
             ep_reward += reward
 
-            if done:
+            if done or t >= 2000:
                 break
             state = next_state
         if len(dqn.memory) >= BATCH_SIZE:
             dqn.learn()
-        if i % 25 == 0:
-            print("episode: {} , the episode reward is {}".format(i, round(ep_reward, 3)))
-        writer.add_scalar("reward" , reward, i)
+        writer.add_scalar("live_time" , t, i)
+    print("Finished")
         
 
 if __name__ == '__main__':

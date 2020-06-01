@@ -1,3 +1,4 @@
+# Terminal Estmation
 import gym, os
 import numpy as np
 import datetime
@@ -24,7 +25,7 @@ action_space = env.action_space.n
 
 #Hyperparameters
 learning_rate = 0.01
-gamma = 0.99
+gamma = 0.95
 render = False
 eps = np.finfo(np.float32).eps.item()
 SavedAction = namedtuple('SavedAction', ['log_prob', 'q_value', 't_value'])
@@ -65,6 +66,7 @@ def select_action(state):
 
 
 def finish_episode():
+    
     R = 0
     save_actions = model.save_actions
     policy_loss = []
@@ -99,10 +101,12 @@ def finish_episode():
 
     
 def main():
-    running_reward = 10
+
     live_time = []
-    writer = SummaryWriter("runs/DHDB-AC_"+str(datetime.datetime.now()))
-    episodes = 300
+    writer = SummaryWriter("runs/TE-AC_"+str(datetime.datetime.now()))
+    episodes  = 500
+    threshold = 8000
+    
     for i_episode in range(episodes):
         state = env.reset()
         for t in count():
@@ -112,11 +116,12 @@ def main():
                 env.render()
             model.rewards.append(reward)
 
-            if done or t >= 1000:
+            if done or t >= threshold:
                 break
-        running_reward = running_reward * 0.99 + t * 0.01
-        writer.add_scalar('live time', t, i_episode)
+
+        writer.add_scalar('live_time', t, i_episode)
         finish_episode()
+    print("finish")
 
 if __name__ == '__main__':
     main()

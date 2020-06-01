@@ -10,7 +10,6 @@ from tensorboardX import SummaryWriter
 from collections import namedtuple
 np.set_printoptions(precision=4)
 
-
 class Maze:
     def __init__(self, size, random_init=False):
         self.size = size
@@ -22,7 +21,7 @@ class Maze:
         else:
             self.pos = 0
         return self.pos
-    
+
     def step(self, action):
         if action == 0 or action == 1:
             return self.pos, -10, True
@@ -36,21 +35,21 @@ class Maze:
                 return self.size, 10, True
             self.pos += 1
             return self.pos, -0.1, False
-        
+
     def render(self):
         env = ['-'] * (self.size + 1)
         env[-1] = '>'
         env[self.pos] = '@'
         str_env = ''.join(env)
         print(str_env)
-        
+
     def get_best_q(self):
         best_q = np.zeros((self.size, 4))
         for i in range(self.size):
             best_q[i] = np.array([-10, -10, 10 - (self.size - i + 1) * 0.1, 10 - (self.size - i - 1) * 0.1])
         best_q[0][2] = -1
         return best_q
-    
+
 class Q_table:
     def __init__(self, action_space, state_space):
         #self._q = np.zeros((state_space, action_space))
@@ -60,16 +59,16 @@ class Q_table:
         self.gamma = 1
         self.alpha = 0.1
         self.learn_step_counter = 0
-        
+
     def action(self, state):
-        
+
         return random.choices(range(self.action_space), weights=np.exp(self._q[state]))[0]
-    
+
         if random.random() <= self.epsilon:
             return self._q[state].argmax()
         else:
             return random.randint(0, self.action_space-1)
-        
+
     def update(self, state, action, reward, nex_state, done):
         if not done:
             delta = reward + max(self._q[nex_state]) - self._q[state][action]
@@ -77,7 +76,7 @@ class Q_table:
             delta = reward - self._q[state][action]
         self._q[state][action] += self.alpha * delta
         self.learn_step_counter += 1
-        
+
         if self.learn_step_counter % 800 == 0:
             self.epsilon += 0.1
         self.epsilon = min(1, self.epsilon)
@@ -94,15 +93,15 @@ class DHDB_table:
         self.alpha = 0.1
         self.beta = 0.8
         self.learn_step_counter = 0
-        
+
     def action(self, state):
         return random.choices(range(self.action_space), weights=np.exp(self._q[state] + self._t[state]) )[0]
-    
+
         if random.random() <= self.epsilon:
             return (self._q[state]+self._t[state]).argmax()
         else:
             return random.randint(0, self.action_space-1)
-        
+
     def update(self, state, action, reward, nex_state, done):
         if not done:
             delta = reward + max(self._q[nex_state] + self._t[nex_state]) - self._q[state][action]
@@ -113,20 +112,20 @@ class DHDB_table:
             self._q[state][action]  = self.beta * self._q[state][action]
             #self._t[state][action] = self.beta * self._t[state][action] + (1-self.beta) * reward
         self.learn_step_counter += 1
-        
+
         if self.learn_step_counter % 800 == 0:
             self.epsilon += 0.1
         self.epsilon = min(1, self.epsilon)
 
 
-            
+
 if __name__ == '__main__':
     state_size = 30
     env = Maze(state_size)
     episode = 12000
     render = False
-    
-    
+
+
     agent = Q_table(4, state_size)
     writer = SummaryWriter("runs/Qt-" + str(datetime.datetime.now()))
     best_q = env.get_best_q()
@@ -146,10 +145,10 @@ if __name__ == '__main__':
         writer.add_scalar("reward", ep_reward, i)
         writer.add_scalar("loss", np.sum(np.abs(best_q - agent._q)), i)
     Qt_q = agent._q
-    
-    
+
+
     agent = DHDB_table(4, state_size)
-    writer = SummaryWriter("runs/DHDB-" + str(datetime.datetime.now()))
+    writer = SummaryWriter("runs/TE-" + str(datetime.datetime.now()))
     for i in range(episode):
         state = env.reset()
         ep_reward = 0
