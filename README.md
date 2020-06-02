@@ -5,7 +5,7 @@
 - DQN
 - REINFORCE
 - Actor-Critic
-- A3C(to work)
+- Asynchronous Actor-Critic(to work)
 
 
 ### Paper Algorithm
