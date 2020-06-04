@@ -1,5 +1,9 @@
 # Reinforcement Learning Algorithm With PyTorch
 
+### How to Use
+requirement:
+ 1. torch
+
 
 ### Basic Algorithm
 - DQN
@@ -13,6 +17,7 @@
 - RND(Random Network Distillation) (to work)
 - FuN() (to work)
 
+
 ### Research
 
 ##### TE-DQN (terminal estimation)
@@ -21,7 +26,8 @@ Have better performance in Actor-Critic method, If the termination state is not 
 ##### MH-DQN (multi head estimation)
 Having a similar learning machism like bagging
 
+#### Record
+
 
 ### Knowledge  
-
     Thank to OpenAI Baselines

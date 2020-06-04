@@ -105,9 +105,10 @@ def main():
 
             if done or t >= 1000:
                 break
-        running_reward = running_reward * 0.99 + t * 0.01
+
         writer.add_scalar('live time', t, i_episode)
         finish_episode()
+    print("finish")
 
 if __name__ == '__main__':
     main()

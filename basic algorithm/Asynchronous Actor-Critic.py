@@ -1,153 +1,193 @@
-
 import math
 import random
 
 import gym
 import numpy as np
 import datetime
+import gc
+from itertools import count
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import torch.multiprocessing as _mp
+
 from torch.distributions import Categorical
-from torch.multiprocessing import Process, Pool
-
-use_cuda = torch.cuda.is_available()
-device   = torch.device("cuda" if use_cuda else "cpu")
+from tensorboardX import SummaryWriter
+from collections import namedtuple
 
 
-num_envs = 5
-env_name = "CartPole-v0"
+SavedAction = namedtuple('SavedAction', ['log_prob', 'q_value'])
 
-def make_env():
-    def _thunk():
-        env = gym.make(env_name)
-        return env
-    return _thunk
+class Policy(nn.Module):
+    
+    def __init__(self, state_space, action_space, hidden_size=64):
+        super(Policy, self).__init__()
+        self.fc1 = nn.Linear(state_space, hidden_size)
 
-plt.ion()
-envs = [make_env() for i in range(num_envs)]
-envs = SubprocVecEnv(envs) # 8 env
+        self.action_head = nn.Linear(hidden_size, action_space)
+        self.value_head  = nn.Linear(hidden_size, 1) 
 
-env = gym.make(env_name) # a single env
+        self.save_actions = []
+        self.rewards = []
 
-class ActorCritic(nn.Module):
-    def __init__(self, num_inputs, num_outputs, hidden_size, std=0.0):
-        super(ActorCritic, self).__init__()
-        
-        self.critic = nn.Sequential(
-            nn.Linear(num_inputs, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, 1)
-        )
-        
-        self.actor = nn.Sequential(
-            nn.Linear(num_inputs, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, num_outputs),
-            nn.Softmax(dim=1),
-        )
-        
     def forward(self, x):
-        value = self.critic(x)
-        probs = self.actor(x)
-        dist  = Categorical(probs)
-        return dist, value
+        x = F.relu(self.fc1(x))
+        action_score = self.action_head(x)
+        state_value  = self.value_head(x)
 
+        return F.softmax(action_score, dim=-1), state_value
 
-def test_env(vis=False):
-    state = env.reset()
-    if vis: env.render()
-    done = False
-    total_reward = 0
-    while not done:
-        state = torch.FloatTensor(state).unsqueeze(0).to(device)
-        dist, _ = model(state)
-        next_state, reward, done, _ = env.step(dist.sample().cpu().numpy()[0])
-        state = next_state
-        if vis: env.render()
-        total_reward += reward
-    return total_reward
+class GlobalAdam(torch.optim.Adam):
+    def __init__(self, params, lr):
+        super(GlobalAdam, self).__init__(params, lr=lr)
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state[p]
+                state['step'] = 0
+                state['exp_avg'] = torch.zeros_like(p.data)
+                state['exp_avg_sq'] = torch.zeros_like(p.data)
 
-
-def compute_returns(next_value, rewards, masks, gamma=0.99):
-    R = next_value
-    returns = []
-    for step in reversed(range(len(rewards))):
-        R = rewards[step] + gamma * R * masks[step]
-        returns.insert(0, R)
-    return returns
-
-
-num_inputs  = envs.observation_space.shape[0]
-num_outputs = envs.action_space.n
-
-#Hyper params:
-hidden_size = 256
-lr          = 1e-3
-num_steps   = 5
-
-model = ActorCritic(num_inputs, num_outputs, hidden_size).to(device)
-optimizer = optim.Adam(model.parameters())
-
-
-max_frames   = 20000
-frame_idx    = 0
-test_rewards = []
-
-
-state = envs.reset()
-
-while frame_idx < max_frames:
-
-    log_probs = []
-    values    = []
-    rewards   = []
-    masks     = []
-    entropy = 0
-
-    # rollout trajectory
-    for _ in range(num_steps):
-        state = torch.FloatTensor(state).to(device)
-        dist, value = model(state)
-
-        action = dist.sample()
-        next_state, reward, done, _ = envs.step(action.cpu().numpy())
-
-        log_prob = dist.log_prob(action)
-        entropy += dist.entropy().mean()
+                state['exp_avg'].share_memory_()
+                state['exp_avg_sq'].share_memory_()
         
-        log_probs.append(log_prob)
-        values.append(value)
-        rewards.append(torch.FloatTensor(reward).unsqueeze(1).to(device))
-        masks.append(torch.FloatTensor(1 - done).unsqueeze(1).to(device))
+# need cuda support
+class Actor:
+    def __init__(self, env_name, global_actor=None, global_optim=None, max_epochs=600, center=False):
         
-        state = next_state
-        frame_idx += 1
         
-        if frame_idx % 100 == 0:
-            test_rewards.append(np.mean([test_env() for _ in range(10)]))
-            plot(frame_idx, test_rewards)
+        self.env = gym.make(env_name)
+        self.net = Policy(self.env.observation_space.shape[0], self.env.action_space.n, hidden_size=64)
+        self.threshold = 2000
+        
+        if not center:
+            self.center       = global_actor
+            self.global_net   = global_actor.net
+            self.global_optim = global_optim
+            self.save_actions = []
+            self.rewards = []
+            self.episodes = max_epochs
+            self.net.load_state_dict(self.global_net.state_dict())
             
-    next_state = torch.FloatTensor(next_state).to(device)
-    _, next_value = model(next_state)
-    returns = compute_returns(next_value, rewards, masks)
+
+        else:
+            self.count = 0
+            self.global_count = 0
+            self.writer = SummaryWriter("runs/A3C_" + str(datetime.datetime.now()))
+            self.net.share_memory()
+            
+
+    def action(self, state, train=True):
+        
+        state = torch.from_numpy(state).float()
+        probs, state_value = self.net(state)
+        m      = Categorical(probs)
+        action = m.sample()
+        if train:
+            self.save_actions.append(SavedAction(m.log_prob(action), state_value))
+
+        return action.item()
+        
+        
+    def rollout(self):
+        for i_episode in range(self.episodes):
+            state = self.env.reset()
+            for t in count():
+                action = self.action(state)
+                state, reward, done, info = self.env.step(action)
+                self.rewards.append(reward)
+
+                if done or t >= self.threshold:
+                    break
+            self.train()
+            
+            
+    def train(self):
+        
+        R = 0
+        gamma = 0.95
+        eps = np.finfo(np.float32).eps.item()
+        
+        save_actions = self.save_actions
+        policy_loss = []
+        value_loss = []
+        rewards = []
+
+        for r in self.rewards[::-1]:
+            R = r + gamma * R
+            rewards.insert(0, R)
+
+        rewards = torch.tensor(rewards)
+        rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
+
+        for (log_prob , value), r in zip(save_actions, rewards):
+            reward = r - value.item()
+            policy_loss.append(-log_prob * reward)
+            value_loss.append(F.smooth_l1_loss(value, torch.tensor([r])))
+            
+        loss = torch.stack(policy_loss).sum() + torch.stack(value_loss).sum()
+        loss.backward()
+        
+
+        self.global_optim.zero_grad()
+        for local_param, global_param in zip(self.net.parameters(), self.global_net.parameters()):
+            global_param._grad = local_param.grad
+
+        self.global_optim.step()
+        self.net.load_state_dict(self.global_net.state_dict())
+
+        
+        self.rewards      = []
+        self.save_actions = []
+        gc.collect()
     
-    log_probs = torch.cat(log_probs)
-    returns   = torch.cat(returns).detach()
-    values    = torch.cat(values)
+    def test_performance(self):
+        
+        state = self.env.reset()
+        t = 0
+        for t in count():
+            action = self.action(state, False)
+            state, reward, done, info = self.env.step(action)
+            if done or t >= self.threshold:
+                break
+        self.writer.add_scalar("live_time", t, self.count)
+        print(self.count, t)
+        self.count += 1
+            
 
-    advantage = returns - values
 
-    actor_loss  = -(log_probs * advantage.detach()).mean()
-    critic_loss = advantage.pow(2).mean()
-
-    loss = actor_loss + 0.5 * critic_loss - 0.001 * entropy
-
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
+# Single Process Worker     
+def single(env_name, global_actor, global_optim, max_epochs=600):
     
-#test_env(True)
+    actor = Actor(env_name, global_actor, global_optim, max_epochs=600)
+    actor.rollout()   
+    
+def test(global_actor):
+    global_actor.test_performance()
+              
+def main(num_processes=2):
+    
+    env_name = "CartPole-v0"
+    learning_rate = 1e-3
+    
+    global_actor = Actor(env_name, center=True)
+    global_optim = GlobalAdam(global_actor.net.parameters(), lr=learning_rate)
+    
+    #mp = _mp.get_context("spawn")
+    processes = []
+    for i in range(num_processes):
+        process = _mp.Process(target=single, args=(env_name, global_actor, global_optim, 100))
+        process.start()
+        processes.append(process)
+        
+    process = _mp.Process(target=test, args=(global_actor, ))
+    process.start()
+    processes.append(process)
+    for process in processes:
+        process.join()
+    
+    print("finish")
+    
+if __name__ == '__main__':
+    main()
