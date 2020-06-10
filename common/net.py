@@ -7,7 +7,6 @@ import torch.nn.functional as F
 class Atari_ConvNet(nn.Module):
     
     def __init__(self, in_channels:int, action_space:int, type:str):
-        
         super(Atari_ConvNet, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
@@ -22,12 +21,11 @@ class Atari_ConvNet(nn.Module):
             self.last_active = nn.softmax()
         
     def forward(self, x):
-        
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         x = x.view(x.size(0), -1)
-        x = F.relu(self.fc1(x)
+        x = F.relu(self.fc1(x))
         x = self.last_active(self.fc2(x))
         return x
         
@@ -36,7 +34,6 @@ class Atari_ConvNet(nn.Module):
 class Atari_Dueling_ConvNet(nn.Module):
     
     def __init__(self, in_channels:int, action_space:int, type:str):
-        
         super(Atari_ConvNet, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
@@ -47,6 +44,7 @@ class Atari_Dueling_ConvNet(nn.Module):
         
         if type == 'DQN':
             self.last_active = nn.ReLU()
+                   
         elif type == 'Policy':
             self.last_active = nn.softmax()
     
@@ -62,24 +60,38 @@ class Atari_Dueling_ConvNet(nn.Module):
         
 class FullyNet(nn.Module):
     
-    def __init__(self, in_channels:int, action_space:int, hidden_size=256:int):
-                  
+    def __init__(self, in_channels:int, action_space:int, type:str, hidden_size:int=256):        
         super(FullNet, self).__init__()
         self.fc1 = nn.Linear(inchannels , hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, action_space)
         
+        
+        if type == 'DQN':
+            self.last_active = nn.ReLU()
+                   
+        elif type == 'Policy':
+            self.last_active = nn.softmax()
+            
     def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.last_active(x)
+        return x
         
         
         
 class Dueling_FullyNet(nn.Module):
     
-    def __init__(self, in_channels:int, action_space:int, hidden_size=256:int):
-                   
+    def __init__(self, in_channels:int, action_space:int, type:str, hidden_size:int=256):       
         super(FullNet, self).__init__()
         self.fc1 = nn.Linear(inchannels , hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, action_space)
         
     def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.last_active(x)
+        return x
+                   
