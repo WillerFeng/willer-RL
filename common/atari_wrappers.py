@@ -1,9 +1,9 @@
-import numpy as np
 import os
-from collections import deque
-import gym
-from gym import spaces
 import cv2
+import gym
+from   gym import spaces
+import numpy as np
+from collections import deque
 cv2.ocl.setUseOpenCL(False)
 
 
