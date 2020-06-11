@@ -2,8 +2,9 @@
 
 ### How to Use
 requirement:
- 1. torch
-
+ - torch
+ - gym
+ - atari_py
 
 ### Basic Algorithm
 - DQN
@@ -21,7 +22,7 @@ requirement:
 ### Research
 
 ##### TE-DQN (terminal estimation)
-Have better performance in Actor-Critic method, If the termination state is not handled correctly, it can lead to serious policy degradation.
+Have better performance in Actor-Critic method. See relative file to learn more.
 
 ##### MH-DQN (multi head estimation)
 Having a similar learning machism like bagging
