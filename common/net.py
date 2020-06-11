@@ -18,7 +18,7 @@ class Atari_ConvNet(nn.Module):
         if   net_type == 'value':
             self.last_active = nn.ReLU()
         elif net_type == 'policy':
-            self.last_active = nn.softmax(dim=1)
+            self.last_active = nn.Softmax(dim=-1)
         else:
             raise ValueError("Undefined net type")
         
@@ -51,7 +51,7 @@ class Atari_Dueling_ConvNet(nn.Module):
         if   net_type == 'value':
             self.last_active = nn.ReLU()
         elif net_type == 'policy':
-            self.last_active = nn.softmax(dim=1)
+            self.last_active = nn.Softmax(dim=-1)
         else:
             raise ValueError("Undefined net type")
     
@@ -83,7 +83,7 @@ class FullyNet(nn.Module):
         if   net_type == 'value':
             self.last_active = nn.ReLU()
         elif net_type == 'policy':
-            self.last_active = nn.softmax(dim=1)
+            self.last_active = nn.Softmax(dim=-1)
         else:
             raise ValueError("Undefined net type")
             
@@ -108,7 +108,7 @@ class Dueling_FullyNet(nn.Module):
         if   net_type == 'value':
             self.last_active = nn.ReLU()
         elif net_type == 'policy':
-            self.last_active = nn.Softmax(dim=1)
+            self.last_active = nn.Softmax(dim=-1)
         else:
             raise ValueError("Undefined net type")
             

@@ -66,7 +66,7 @@ save_actions, env_rewards = [], []
 def select_action(state):
     
     global save_actions
-    state = torch.from_numpy(state).float().to(device)
+    state = torch.from_numpy(state).double().to(device)
     probs, q_value, t_value = model(state)
     m = Categorical(probs)
     action = m.sample()
@@ -83,6 +83,7 @@ def finish_episode():
     save_actions = save_actions
     policy_loss = []
     q_value_loss = []
+    t_value_loss = []
     rewards = []
 
     for r in env_rewards[::-1]:
@@ -91,18 +92,15 @@ def finish_episode():
 
     rewards = torch.tensor(rewards)
     rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
-    
-
-    t_value_loss = F.mse_loss(torch.Tensor([rewards[-1]]), torch.Tensor([save_actions[-1].t_value]))
-                              
+                               
     for (log_prob , q_value, t_value), r in zip(save_actions[:-1], rewards[:-1]):
-    
         reward = r - (q_value.item() + t_value.item())
         policy_loss.append(-log_prob * reward)
         q_value_loss.append(F.smooth_l1_loss(q_value, torch.tensor([r]).to(device)))
-        
+    t_value_loss.append(F.mse_loss(save_actions[-1].t_value, torch.tensor([rewards[-1]]]).to(device)))
+    
     optimizer.zero_grad()
-    loss = torch.stack(policy_loss).sum() + torch.stack(q_value_loss).sum() + t_value_loss
+    loss = torch.stack(policy_loss).sum() + torch.stack(q_value_loss).sum() + torch.stack(t_value_loss).sum()
     loss.backward()
     optimizer.step()
 
@@ -131,7 +129,6 @@ def main():
     
         writer.add_scalar('live_time', t, i_episode)
         finish_episode()
-        
     print("finish")
 
 if __name__ == '__main__':
