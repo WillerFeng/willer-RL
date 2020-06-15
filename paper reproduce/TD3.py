@@ -1,4 +1,5 @@
 import copy
+import datetime
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Implementation of Twin Delayed Deep Deterministic Policy Gradients (TD3)
 # Paper: https://arxiv.org/abs/1802.09477
 
+# ============================================================================
 
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
@@ -20,7 +22,6 @@ class Actor(nn.Module):
         self.l3 = nn.Linear(256, action_dim)
 
         self.max_action = max_action
-
 
     def forward(self, state):
         a = F.relu(self.l1(state))
@@ -64,7 +65,53 @@ class Critic(nn.Module):
         q1 = self.l3(q1)
         return q1
 
-
+# ============================================================================
+    
+class ConvActor(nn.Module):
+    def __init__(self, in_channels, aciton_space):
+        super(ConvActor, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
+        self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv2d(64         , 64, kernel_size=3, stride=1)
+                   
+        self.fc_action1 = nn.Linear(7 * 7 * 64, 512)
+        self.fc_action2 = nn.Linear(512, action_space)
+        
+    def forward(self, x):
+        
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.view(x.size(0), -1)
+        
+        action = F.relu(self.fc_action1(x))
+        action = F.softmax(self.fc_action2(action), dim=-1)
+        return action 
+        
+        
+class ConvCritic(nn.Module):
+    def __init__(self, in_channels, aciton_space):
+        super(ConvActor, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
+        self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv2d(64         , 64, kernel_size=3, stride=1)
+                   
+        self.fc_value1 = nn.Linear(7 * 7 * 64, 512)
+        self.fc_value2 = nn.Linear(512, 1)
+        
+    def forward(self, x):
+        
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.view(x.size(0), -1)
+        
+        value = F.relu(self.fc_value1(x))
+        value = self.fc_value2(value)
+        return value
+    
+# ============================================================================
+    
 class TD3(object):
     def __init__(
         self,
@@ -153,11 +200,11 @@ class TD3(object):
 
 
     def save(self, filename):
-        torch.save(self.critic.state_dict(), filename + "_critic")
-        torch.save(self.critic_optimizer.state_dict(), filename + "_critic_optimizer")
+        torch.save(self.critic.state_dict(), filename + "_critic_" + str(datetime.datetime.now()))
+        torch.save(self.critic_optimizer.state_dict(), filename + "_critic_optimizer_" + str(datetime.datetime.now()))
 
-        torch.save(self.actor.state_dict(), filename + "_actor")
-        torch.save(self.actor_optimizer.state_dict(), filename + "_actor_optimizer")
+        torch.save(self.actor.state_dict(), filename + "_actor_" + str(datetime.datetime.now()))
+        torch.save(self.actor_optimizer.state_dict(), filename + "_actor_optimizer_" + str(datetime.datetime.now()))
 
 
     def load(self, filename):
