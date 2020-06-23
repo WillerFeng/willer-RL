@@ -12,13 +12,13 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 from tensorboardX import SummaryWriter
 
-from common import atari_wrappers, buffer, net, util
+from common import atari_wrappers, buffer, net, utils
 
 env = gym.make('CartPole-v0')
 env = env.unwrapped
 
 env.seed(0)
-util.set_random_seed(0)
+utils.set_random_seed(0)
 
 state_space = env.observation_space.shape[0]
 action_space = env.action_space.n
