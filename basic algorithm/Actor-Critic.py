@@ -13,8 +13,8 @@ from tensorboardX import SummaryWriter
 
 from common import atari_wrappers, buffer, net, utils
 
-
-env = gym.make('CartPole-v0')
+env_name = 'CartPole-v0'
+env = gym.make(env_name)
 env = env.unwrapped
 
 env.seed(0)
@@ -23,10 +23,11 @@ utils.set_random_seed(0)
 state_space = env.observation_space.shape[0]
 action_space = env.action_space.n
 
-learning_rate = 0.01
+learning_rate = 1e-3
 gamma = 0.95
 weight_decay = 1e-4
 render = False
+
 eps = np.finfo(np.float32).eps.item()
 SavedAction = namedtuple('SavedAction', ['log_prob', 'value'])
 
@@ -68,7 +69,7 @@ def finish_episode():
     for (log_prob , value), r in zip(save_actions, rewards):
         reward = r - value.item()
         policy_loss.append(-log_prob * reward)
-        value_loss.append(F.smooth_l1_loss(value, torch.tensor([r]).to(device)))
+        value_loss.append(F.mse_loss(value, torch.tensor([r]).to(device)))
 
     optimizer.zero_grad()
     loss = torch.stack(policy_loss).sum() + torch.stack(value_loss).sum()
@@ -82,11 +83,11 @@ def finish_episode():
 def main():
 
     live_time = []
-    writer = SummaryWriter("runs/Baseline-AC_CartPole-v0_"+str(datetime.datetime.now()))
+    writer = SummaryWriter("runs/Baseline-AC_" + env_name + "_" +str(datetime.datetime.now()))
     episodes  = 400
-    threshold = 2000
+    threshold = 4000
     global env_rewards
-    
+    end_episode = None
     print("Collecting Experience....")
     for i_episode in range(episodes):
         state = env.reset()
@@ -98,11 +99,16 @@ def main():
             if render: 
                 env.render()
             env_rewards.append(reward)
-            if done:
+            if done or t >= threshold:
                 break
 
+            
         writer.add_scalar('live_time', t, i_episode)
+        if t == threshold:
+            end_episode = i_episode
+            break
         finish_episode()
+    print("End : ", end_episode)
     print("finish")
 
 if __name__ == '__main__':

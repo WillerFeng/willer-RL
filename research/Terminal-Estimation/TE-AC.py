@@ -1,4 +1,3 @@
-# Terminal Estmation
 import gym, os
 import numpy as np
 import datetime
@@ -14,7 +13,8 @@ from tensorboardX import SummaryWriter
 
 from common import atari_wrappers, buffer, net, utils
 
-env = gym.make('CartPole-v0')
+env_name = 'Boxing-ram-v0'
+env = gym.make(env_name)
 env = env.unwrapped
 
 env.seed(0)
@@ -23,115 +23,151 @@ utils.set_random_seed(0)
 state_space = env.observation_space.shape[0]
 action_space = env.action_space.n
 
-learning_rate = 0.02
-gamma = 0.95
-weight_decay = 1e-3
-render = False
-eps = np.finfo(np.float32).eps.item()
-SavedAction = namedtuple('SavedAction', ['log_prob', 'q_value', 't_value'])
+class Actor(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Actor, self).__init__()
+
+        self.l1 = nn.Linear(state_dim, 256)
+        self.l2 = nn.Linear(256, 256)
+        self.l3 = nn.Linear(256, action_dim)
 
 
-class Policy(nn.Module):
-    def __init__(self, state_space:int, action_space:int, net_type:str, hidden_size:int=256):       
-        super(Policy, self).__init__()
-        self.fc1 = nn.Linear(state_space, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
+    def forward(self, state):
+        a = F.relu(self.l1(state))
+        a = F.relu(self.l2(a))
+        return F.softmax(self.l3(a), dim=-1)
+
+
+class Critic(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Critic, self).__init__()
+
+        self.l1 = nn.Linear(state_dim + 1, 256)
+        self.l2 = nn.Linear(256, 256)
+        self.l3 = nn.Linear(256, 1)
+
+    def forward(self, state, action):
+        sa = torch.cat([state, action], 1)
+
+        q1 = F.relu(self.l1(sa))
+        q1 = F.relu(self.l2(q1))
+        q1 = self.l3(q1)
+        return q1
+
+
+    
+class TE_AC(object):
+    def __init__(
+        self,
+        state_dim,
+        action_dim,
+        discount=0.99,
+        lr=3e-4,
+        weight_decay=1e-3,
+        ):
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        self.fc_q_value = nn.Linear(hidden_size, 1)
-        self.fc_t_value = nn.Linear(hidden_size, 1)
-        self.fc_action = nn.Linear(hidden_size, action_space)
+        self.actor = Actor(state_dim, action_dim).to(self.device)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr)
+
+        self.q_critic = Critic(state_dim, action_dim).to(self.device)
+        self.q_critic_optimizer = torch.optim.Adam(self.q_critic.parameters(), lr=lr, weight_decay=weight_decay)
         
-        if   net_type == 'value':
-            self.last_active = nn.ReLU()
-        elif net_type == 'policy':
-            self.last_active = nn.Softmax(dim=-1)
-        else:
-            raise ValueError("Undefined net type")
+        self.t_critic = Critic(state_dim, action_dim).to(self.device)
+        self.t_critic_optimizer = torch.optim.Adam(self.t_critic.parameters(), lr=lr, weight_decay=weight_decay)
+
+        self.discount = discount
+
+
+
+    def select_action(self, state):
+        state = torch.FloatTensor(state).to(self.device)
+        action = self.actor(state)
+        m = Categorical(action)
+        action = m.sample()
+        return action.item(), m.log_prob(action)
+
+    def train(self, episode, replay_buffer, batch_size=100):
+
+        state, action, reward, next_state, log_action = zip(*episode)
+        end_state, end_action, end_reward, _, _ = replay_buffer.sample(batch_size)
+        
+        state = torch.FloatTensor(state).to(self.device)
+        action = torch.FloatTensor(action).to(self.device)
+        reward = torch.FloatTensor(reward).to(self.device)
+        next_state = torch.FloatTensor(next_state).to(self.device)
+
+        end_state  = torch.FloatTensor(end_state).to(self.device)
+        end_action = torch.FloatTensor(end_action).to(self.device)
+        end_reward = torch.FloatTensor(end_reward).to(self.device)
+        end_action = end_action.view(-1, 1)
+        end_reward = end_reward.view(-1, 1)
+        
+        t_critic_loss = F.mse_loss(end_reward, self.t_critic(end_state, end_action))
+        self.t_critic_optimizer.zero_grad()
+        t_critic_loss.backward()
+        self.t_critic_optimizer.step()
+        
+        
+        with torch.no_grad():
+            next_action = self.actor(next_state)
+            m = Categorical(next_action)
+            action_sample = m.sample().cpu().numpy().reshape(-1, 1)
+            action_sample = torch.FloatTensor(action_sample).to(self.device)
+
+            target_q = self.q_critic(next_state, action_sample)
+            target_t = self.t_critic(next_state, action_sample)
+            target_value = reward + self.discount * (target_q + target_t)
             
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+
+        q_critic_loss = F.mse_loss(target_value, self.q_critic(state, action))
+        self.q_critic_optimizer.zero_grad()
+        q_critic_loss.backward()
+        self.q_critic_optimizer.step()
         
-        action  = self.last_active(self.fc_action(x))
-        q_value = self.fc_q_value(x)
-        t_value = self.fc_t_value(x)
-        
-        return action, q_value, t_value
-                  
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = Policy(state_space, action_space, 'policy', 128).to(device)
-optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-save_actions, env_rewards = [], []
-
-def select_action(state):
-    
-    global save_actions
-    state = torch.from_numpy(state).double().to(device)
-    probs, q_value, t_value = model(state)
-    m = Categorical(probs)
-    action = m.sample()
-    
-    save_actions.append(SavedAction(m.log_prob(action), q_value, t_value))
-
-    return action.item()
+        actor_loss = []
+        for log_action_t in log_action:
+            actor_loss.append(-log_action_t * (self.q_critic(state, action) + self.t_critic(state, action)))
+        actor_loss = torch.stack(actor_loss).sum()
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
 
 
-def finish_episode():
-    global save_actions, env_rewards
-    
-    R = 0
-    save_actions = save_actions
-    policy_loss = []
-    q_value_loss = []
-    t_value_loss = []
-    rewards = []
+    def save(self, filename):
+        pass
 
-    for r in env_rewards[::-1]:
-        R = r + gamma * R
-        rewards.insert(0, R)
+    def load(self, filename):
+        pass
 
-    rewards = torch.tensor(rewards)
-    rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
-                               
-    for (log_prob , q_value, t_value), r in zip(save_actions[:-1], rewards[:-1]):
-        reward = r - (q_value.item() + t_value.item())
-        policy_loss.append(-log_prob * reward)
-        q_value_loss.append(F.smooth_l1_loss(q_value, torch.tensor([r]).to(device)))
-    t_value_loss.append(F.mse_loss(save_actions[-1].t_value, torch.tensor([rewards[-1]]]).to(device)))
-    
-    optimizer.zero_grad()
-    loss = torch.stack(policy_loss).sum() + torch.stack(q_value_loss).sum() + torch.stack(t_value_loss).sum()
-    loss.backward()
-    optimizer.step()
-
-    save_actions, env_rewards = [], []
-
-    
 def main():
 
-    live_time = []
-    writer = SummaryWriter("runs/TE-AC_decay=1e-3_CartPole-v0_"+str(datetime.datetime.now()))
-    episodes  = 400
+    writer = SummaryWriter("runs/TE-AC_decay=1e-3_"+ env_name + "_" +str(datetime.datetime.now()))
+    episodes  = 600
     threshold = 2000
-    
+    agent = TE_AC(state_space, action_space)
+    replay_buffer = buffer.ReplayBuffer(size=1e4)
     print("Collecting Experience....")
     for i_episode in range(episodes):
+
+        total_reward = 0
+        t = 0
+        episode = []
         state = env.reset()
         for t in count():
-            action = select_action(state)
-            state, reward, done, info = env.step(action)
-            if render: 
-                env.render()
-            env_rewards.append(reward)
-
-            if done or t >= threshold:
+            action, log_action = agent.select_action(state)
+            next_state, reward, done, info = env.step(action)
+            if not done:
+                episode.append([state, [action], [reward], next_state, log_action])
+            state = next_state
+            total_reward += reward
+            if done:
+                replay_buffer.add(state, action, reward, None, None)
                 break
-    
-        writer.add_scalar('live_time', t, i_episode)
-        finish_episode()
+  
+        writer.add_scalar('reward', total_reward, i_episode)
+        agent.train(episode, replay_buffer)
     print("finish")
-
 if __name__ == '__main__':
     main()
-
-
