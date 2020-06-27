@@ -1,188 +1,211 @@
-
-import argparse
-import pickle
-from collections import namedtuple
-
-import os
+import copy
+import datetime
 import numpy as np
-import matplotlib.pyplot as plt
-
-import gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-from torch.distributions import Normal
-from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 
-# Parameters
-parser = argparse.ArgumentParser(description='Solve the Pendulum-v0 with PPO')
-parser.add_argument(
-    '--gamma', type=float, default=0.9, metavar='G', help='discount factor (default: 0.9)')
-parser.add_argument('--seed', type=int, default=0, metavar='N', help='random seed (default: 0)')
-parser.add_argument('--render', action='store_true', default=True, help='render the environment')
-parser.add_argument(
-    '--log-interval',
-    type=int,
-    default=10,
-    metavar='N',
-    help='interval between training status logs (default: 10)')
-args = parser.parse_args()
 
-env = gym.make('Pendulum-v0').unwrapped
-num_state = env.observation_space.shape[0]
-num_action = env.action_space.shape[0]
-torch.manual_seed(args.seed)
-env.seed(args.seed)
-
-Transition = namedtuple('Transition',['state', 'aciton', 'reward', 'a_log_prob', 'next_state'])
-TrainRecord = namedtuple('TrainRecord',['episode', 'reward'])
 
 class Actor(nn.Module):
-    def __init__(self):
+    def __init__(self, state_dim, action_dim):
         super(Actor, self).__init__()
-        self.fc1 = nn.Linear(num_state, 64)
-        self.fc2 = nn.Linear(64,8)
-        self.mu_head = nn.Linear(8, 1)
-        self.sigma_head = nn.Linear(8, 1)
 
-    def forward(self, x):
-        x = F.leaky_relu(self.fc1(x))
-        x = F.leaky_relu(self.fc2(x))
+        self.l1 = nn.Linear(state_dim, 256)
+        self.l2 = nn.Linear(256, 256)
+        self.l3 = nn.Linear(256, action_dim)
 
-        mu = self.mu_head(x)
-        sigma = self.sigma_head(x)
 
-        return mu, sigma
+    def forward(self, state):
+        a = F.relu(self.l1(state))
+        a = F.relu(self.l2(a))
+        return torch.tanh(self.l3(a))
+
 
 class Critic(nn.Module):
-    def __init__(self):
+    def __init__(self, state_dim, action_dim):
         super(Critic, self).__init__()
-        self.fc1 = nn.Linear(num_state, 64)
-        self.fc2 = nn.Linear(64, 8)
-        self.state_value= nn.Linear(8, 1)
 
+        # Q1 architecture
+        self.l1 = nn.Linear(state_dim + action_dim, 256)
+        self.l2 = nn.Linear(256, 256)
+        self.l3 = nn.Linear(256, 1)
+
+        # Q2 architecture
+        self.l4 = nn.Linear(state_dim + action_dim, 256)
+        self.l5 = nn.Linear(256, 256)
+        self.l6 = nn.Linear(256, 1)
+
+
+    def forward(self, state, action):
+        sa = torch.cat([state, action], 1)
+
+        q1 = F.relu(self.l1(sa))
+        q1 = F.relu(self.l2(q1))
+        q1 = self.l3(q1)
+
+        q2 = F.relu(self.l4(sa))
+        q2 = F.relu(self.l5(q2))
+        q2 = self.l6(q2)
+        return q1, q2
+
+
+    def Q1(self, state, action):
+        sa = torch.cat([state, action], 1)
+
+        q1 = F.relu(self.l1(sa))
+        q1 = F.relu(self.l2(q1))
+        q1 = self.l3(q1)
+        return q1
+
+# ============================================================================
+    
+class ConvActor(nn.Module):
+    def __init__(self, in_channels, aciton_space):
+        super(ConvActor, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
+        self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv2d(64         , 64, kernel_size=3, stride=1)
+                   
+        self.fc_action1 = nn.Linear(7 * 7 * 64, 512)
+        self.fc_action2 = nn.Linear(512, action_space)
+        
     def forward(self, x):
-        x = F.leaky_relu(self.fc1(x))
-        x = F.leaky_relu(self.fc2(x))
-        value = self.state_value(x)
+        
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.view(x.size(0), -1)
+        
+        action = F.relu(self.fc_action1(x))
+        action = F.softmax(self.fc_action2(action), dim=-1)
+        return action 
+        
+        
+class ConvCritic(nn.Module):
+    def __init__(self, in_channels, aciton_space):
+        super(ConvActor, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
+        self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv2d(64         , 64, kernel_size=3, stride=1)
+                   
+        self.fc_value1 = nn.Linear(7 * 7 * 64, 512)
+        self.fc_value2 = nn.Linear(512, 1)
+        
+    def forward(self, x):
+        
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.view(x.size(0), -1)
+        
+        value = F.relu(self.fc_value1(x))
+        value = self.fc_value2(value)
         return value
+    
+    
+class SAC:
+    def __init__(
+        self,
+        state_dim,
+        action_dim,
+        max_action,
+        discount=0.99,
+        tau=0.005,
+        policy_noise=0.2,
+        noise_clip=0.5,
+        policy_freq=2
+        ):
 
-class PPO():
-    clip_param = 0.2
-    max_grad_norm = 0.5
-    ppo_epoch = 10
-    buffer_capacity = 1000
-    batch_size = 8
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        self.actor = Actor(state_dim, action_dim, max_action).to(device)
+        self.actor_target = copy.deepcopy(self.actor)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
 
-    def __init__(self):
-        super(PPO, self).__init__()
-        self.actor_net = Actor().float()
-        self.critic_net = Critic().float()
-        self.buffer = []
-        self.counter = 0
-        self.training_step = 0
+        self.critic = Critic(state_dim, action_dim).to(device)
+        self.critic_target = copy.deepcopy(self.critic)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
 
-        self.actor_optimizer = optim.Adam(self.actor_net.parameters(), 1e-3)
-        self.critic_net_optimizer = optim.Adam(self.critic_net.parameters(), 4e-3)
-        if not os.path.exists('../param'):
-            os.makedirs('../param/net_param')
-            os.makedirs('../param/img')
+        self.max_action = max_action
+        self.discount = discount
+        self.tau = tau
+        self.policy_noise = policy_noise
+        self.noise_clip = noise_clip
+        self.policy_freq = policy_freq
+
+        self.total_it = 0
+
 
     def select_action(self, state):
-        state = torch.from_numpy(state).float().unsqueeze(0)
+        state = torch.FloatTensor(state.reshape(1, -1)).to(device)
+        return self.actor(state).cpu().data.numpy().flatten()
+
+
+    def train(self, replay_buffer, batch_size=100):
+        self.total_it += 1
+
+        # Sample replay buffer 
+        state, action, next_state, reward, not_done = replay_buffer.sample(batch_size)
+
         with torch.no_grad():
-            mu, sigma = self.actor_net(state)
-        dist = Normal(mu, sigma)
-        action = dist.sample()
-        action_log_prob = dist.log_prob(action)
-        action = action.clamp(-2, 2)
-        return action.item(), action_log_prob.item()
+            # Select action according to policy and add clipped noise
+            noise = (
+                torch.randn_like(action) * self.policy_noise
+            ).clamp(-self.noise_clip, self.noise_clip)
+
+            next_action = (
+                self.actor_target(next_state) + noise
+            ).clamp(-self.max_action, self.max_action)
+
+            # Compute the target Q value
+            target_Q1, target_Q2 = self.critic_target(next_state, next_action)
+            target_Q = torch.min(target_Q1, target_Q2)
+            target_Q = reward + not_done * self.discount * target_Q
+
+        # Get current Q estimates
+        current_Q1, current_Q2 = self.critic(state, action)
+
+        # Compute critic loss
+        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+
+        # Optimize the critic
+        self.critic_optimizer.zero_grad()
+        critic_loss.backward()
+        self.critic_optimizer.step()
+
+        # Delayed policy updates
+        if self.total_it % self.policy_freq == 0:
+
+            # Compute actor losse
+            actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
+
+            # Optimize the actor 
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            self.actor_optimizer.step()
+
+            # Update the frozen target models
+            for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+
+            for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
 
-    def get_value(self, state):
-        state = torch.from_numpy(state)
-        with torch.no_grad():
-            value = self.critic_net(state)
-        return value.item()
+    def save(self, filename):
+        torch.save(self.critic.state_dict(), filename + "_critic_" + str(datetime.datetime.now()))
+        torch.save(self.critic_optimizer.state_dict(), filename + "_critic_optimizer_" + str(datetime.datetime.now()))
 
-    def save_param(self):
-        torch.save(self.actor_net.state_dict(), '../param/net_param/actor_net'+str(time.time())[:10],+'.pkl')
-        torch.save(self.critic_net.state_dict(), '../param/net_param/critic_net'+str(time.time())[:10],+'.pkl')
+        torch.save(self.actor.state_dict(), filename + "_actor_" + str(datetime.datetime.now()))
+        torch.save(self.actor_optimizer.state_dict(), filename + "_actor_optimizer_" + str(datetime.datetime.now()))
 
-    def store_transition(self, transition):
-        self.buffer.append(transition)
-        self.counter+=1
-        return counter % self.buffer_capacity == 0
 
-    def update(self):
-        self.training_step +=1
+    def load(self, filename):
+        self.critic.load_state_dict(torch.load(filename + "_critic"))
+        self.critic_optimizer.load_state_dict(torch.load(filename + "_critic_optimizer"))
+        self.critic_target = copy.deepcopy(self.critic)
 
-        state = torch.tensor([t.state for t in self.buffer ], dtype=torch.float)
-        action = torch.tensor([t.action for t in self.buffer], dtype=torch.float).view(-1, 1)
-        reward = torch.tensor([t.reward for t in self.buffer], dtype=torch.float).view(-1, 1)
-        next_state = torch.tensor([t.next_state for t in self.buffer], dtype=torch.float)
-        old_action_log_prob = torch.tensor([t.a_log_prob for t in self.buffer], dtype=torch.float).view(-1, 1)
-
-        reward = (reward - reward.mean())/(reward.std() + 1e-10)
-        with torch.no_grad():
-            target_v = reward + args.gamma * self.critic_net(next_state)
-
-        advantage = (target_v - self.critic_net(state)).detach()
-        for _ in range(self.ppo_epoch): # iteration ppo_epoch 
-            for index in BatchSampler(SubsetRandomSampler(range(self.buffer_capacity), self.batch_size, True)):
-                # epoch iteration, PPO core!!!
-                mu, sigma = self.actor_net(state[index])
-                n = Normal(mu, sigma)
-                action_log_prob = n.log_prob(action[index])
-                ratio = torch.exp(action_log_prob - old_action_log_prob)
-                
-                L1 = ratio * advantage[index]
-                L2 = torch.clamp(ratio, 1-self.clip_param, 1+self.clip_param) * advantage[index]
-                action_loss = -torch.min(L1, L2).mean() # MAX->MIN desent
-                self.actor_optimizer.zero_grad()
-                action_loss.backward()
-                nn.utils.clip_grad_norm_(self.actor_net.parameters(), self.max_grad_norm)
-                self.actor_optimizer.step()
-
-                value_loss = F.smooth_l1_loss(self.critic_net(state[index]), target_v[index])
-                self.critic_net_optimizer.zero_grad()
-                value_loss.backward()
-                nn.utils.clip_grad_norm_(self.critic_net.parameters(), self.max_grad_norm)
-                self.critic_net_optimizer.step()
-
-        del self.buffer[:]
-
-def main():
-
-    agent = PPO()
-
-    training_records = []
-    running_reward = -1000
-
-    for i_epoch in range(1000):
-        score = 0
-        state = env.reset()
-        if args.render: env.render()
-        for t in range(200):
-            action, action_log_prob = agent.select_action(state)
-            next_state, reward, done, info = env.step(action)
-            trans = Transition(state, action, reward, action_log_prob, next_state)
-            if args.render: env.render()
-            if agent.store_transition(trans):
-                agent.update()
-            score += reward
-            state = next_state
-
-        running_reward = running_reward * 0.9 + score * 0.1
-        training_records.append(TrainingRecord(i_epoch, running_reward))
-        if i_epoch % 10 ==0:
-            print("Epoch {}, Moving average score is: {:.2f} ".format(i_epoch, running_reward))
-        if running_reward > -200:
-            print("Solved! Moving average score is now {}!".format(running_reward))
-            env.close()
-            agent.save_param()
-            break
-
-if __name__ == '__main__':
-    main()
+        self.actor.load_state_dict(torch.load(filename + "_actor"))
+        self.actor_optimizer.load_state_dict(torch.load(filename + "_actor_optimizer"))
+        self.actor_target = copy.deepcopy(self.actor)
