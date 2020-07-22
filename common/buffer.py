@@ -2,7 +2,7 @@ import numpy as np
 import random        
 import torch
 
-class ReplayBuffer(object):
+class ReplayBuffer:
     def __init__(self, size):
     
         self._storage  = []

@@ -1,7 +1,7 @@
 import os
 import cv2
 import gym
-from   gym import spaces
+from gym import spaces
 import numpy as np
 from collections import deque
 cv2.ocl.setUseOpenCL(False)
