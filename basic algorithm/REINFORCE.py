@@ -90,18 +90,6 @@ def finish_episode():
     del policy.rewards[:]
     del policy.saved_log_probs[:]
 
-def plot(steps):
-    ax = plt.subplot(111)
-    ax.cla()
-    ax.set_title('Training')
-    ax.set_xlabel('Episode')
-    ax.set_ylabel('Run Time')
-    ax.plot(steps)
-    RunTime = len(steps)
-    path =  './PG_MountainCar-v0/'+'RunTime'+str(RunTime)+'.jpg'
-    if len(steps) % 100 == 0:
-        plt.savefig(path)
-    plt.pause(0.0000001)
 
 
 
