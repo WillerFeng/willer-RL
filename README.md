@@ -12,15 +12,14 @@ requirement:
 ### Basic Algorithm
 - DQN
 - REINFORCE
-- Actor-Critic
-- Asynchronous Actor-Critic(to work)
-
+- Advantage Actor-Critic
+- DDPG
 
 ### Paper Algorithm
 - ICM(Intrinsic Curiosity Model) (to work)
 - RND(Random Network Distillation) (to work)
 - FuN() (to work)
-
+- APE-X(Distributed ...)
 
 ### Research
 
