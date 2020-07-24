@@ -14,37 +14,38 @@ from tensorboardX import SummaryWriter
 
 from common import atari_wrappers, buffer, net, utils
 
+# Local Version
 
 class DQN(nn.Module):
     def __init__(self, state_dim, action_dim, epsilon=0.9):
         super(DQN, self).__init__()
-        
+
         self.state_dim = state_dim
-        self.action_dim = action_dim        
+        self.action_dim = action_dim
         self.epsilon = epsilon
-        
+
         self.l1 = nn.Linear(state_dim, 512)
         self.l2 = nn.Linear(512, 512)
         self.l3 = nn.Linear(512, action_dim)
         self.state_dim = state_dim
         self.action_dim = action_dim
-        
+
     def forward(self, state):
-        
+
         a = F.relu(self.l1(state))
         a = F.relu(self.l2(a))
         return self.l3(a)
-    
+
     def select_action(self, state):
         if np.random.randn() <= self.epsilon:
             state = torch.FloatTensor(state).unsqueeze(0)
             action_value = self.forward(state)
             action = torch.max(action_value, 1)[1].cpu().numpy()
-            action = action[0] 
+            action = action[0]
         else:
             action = np.random.randint(0, self.action_dim)
         return action
-    
+
 class APE_X:
     def __init__(
         self,
@@ -62,30 +63,30 @@ class APE_X:
         self.num_learner = num_learner
         self.queue = mp.Queue(queue_size)
         #self.writer = SummaryWriter("runs/APE-X"+ env_name + "_" +str(datetime.datetime.now()))
-        
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.env_name = env_name
         self.lr = lr
         self.discount = discount
-        
 
-        
+
+
     def train(self):
-        
+
         print("<<=== Begin Train ===>>")
-        
+
         process_pool = []
         process_prime = mp.Process(target=self.run_actor, args=(self.queue, ), kwargs={'center':True, 'record_performance':True})
         process_prime.start()
         process_pool.append(process_prime)
-        
+
         for i in range(self.num_actor-1):
             process_sub = mp.Process(target=self.run_actor, args=(self.queue, ))
             process_sub.start()
             process_pool.append(process_sub)
-            
+
         process_learn = mp.Process(target=self.run_learner, args=(self.queue, ))
         process_learn.start()
         process_pool.append(process_learn)
@@ -93,10 +94,10 @@ class APE_X:
         for process in process_pool:
             process.join()
         print("<<=== Finish ===>>")
-        
-            
+
+
     def run_actor(self, experience_queue, train_epoch=3, center=False, record_performance=False):
-        
+
         agent = DQN(self.state_dim, self.action_dim)
         env = gym.make(self.env_name)
         env = env.unwrapped
@@ -106,7 +107,7 @@ class APE_X:
         if center:
             self.center_agent = agent
         self.optimizer = torch.optim.Adam(agent.parameters(), lr=self.lr)
-        
+
         threshold = 1000
         for epoch in range(train_epoch):
             total_reward = 0
@@ -121,7 +122,7 @@ class APE_X:
                 total_reward += reward
                 if done or t >= threshold:
                     break
-                    
+
             experience_queue.put(episode)
             if record_performance:
                 pass
@@ -130,19 +131,19 @@ class APE_X:
                 agent.load_state_dict(self.center_agent.state_dict())
 
         experience_queue.put(None)
-    
+
     def run_learner(self, experience_queue):
-        
+
         while True:
             while experience_queue.empty():
                 time.sleep(1)
                 print('wait')
             episode = experience_queue.get()
             if episode == None:
-                return 
-            
+                return
+
             batch_state, batch_action, batch_reward, batch_next_state, _ = zip(*episode)
-            
+
             batch_state  = torch.FloatTensor(batch_state).to(self.device)
             batch_action = torch.LongTensor(batch_action).view(-1, 1).to(self.device)
             batch_reward = torch.FloatTensor(batch_reward).view(-1, 1).to(self.device)
@@ -160,9 +161,9 @@ class APE_X:
 
             gc.collect()
             print('udpate once')
-    
+
 def main():
-    
+
     env_name = 'MountainCar-v0'
     env = gym.make(env_name)
     env = env.unwrapped
@@ -172,10 +173,10 @@ def main():
 
     state_space = env.observation_space.shape[0]
     action_space = env.action_space.n
-    
+
     agent = APE_X(env_name, state_space, action_space)
     agent.train()
-    
+
 if __name__ == '__main__':
     #mp.set_start_method('spawn')
     main()
