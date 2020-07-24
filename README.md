@@ -19,7 +19,7 @@ requirement:
 - ICM(Intrinsic Curiosity Model) (to work)
 - RND(Random Network Distillation) (to work)
 - FuN() (to work)
-- APE-X(Distributed ...)
+- APE-X(CPU version)
 
 ### Research
 
