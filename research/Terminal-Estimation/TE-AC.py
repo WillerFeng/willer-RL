@@ -54,29 +54,6 @@ class Critic(nn.Module):
         q1 = self.l3(q1)
         return q1
 
-class Critic_O(nn.Module):
-    def __init__(self, state_dim, action_dim):
-        super(Critic_O, self).__init__()
-
-        self.l1 = nn.Linear(state_dim + action_dim, 512)
-        self.l2 = nn.Linear(512, 512)
-        self.l3 = nn.Linear(512, 1)
-
-        self.action_dim = action_dim
-
-    def forward(self, state, action):
-
-        batch_size = state.size(0)
-        action = torch.zeros(batch_size, self.action_dim).to(torch.device('cuda')).scatter_(1, action, 1)
-        sa = torch.cat([state, action], 1)
-
-        q1 = F.relu(self.l1(sa))
-        q1 = F.relu(self.l2(q1))
-        q1 = self.l3(q1)
-
-        return q1
-
-
 
 class TE_AC(object):
     def __init__(
@@ -121,7 +98,6 @@ class TE_AC(object):
         end_state, end_action, end_reward, _, _ = self.t_buffer.sample(self.batch_size)
 
         state = torch.FloatTensor(state).to(self.device)
-        # change type
         action = torch.FloatTensor(action).to(self.device)
         reward = torch.FloatTensor(reward).to(self.device)
         next_state = torch.FloatTensor(next_state).to(self.device)
@@ -141,7 +117,6 @@ class TE_AC(object):
             next_action = self.actor(next_state)
             m = Categorical(next_action)
             action_sample = m.sample().cpu().numpy().reshape(-1, 1)
-            # change type
             action_sample = torch.FloatTensor(action_sample).to(self.device)
 
             target_q = self.q_critic(next_state, action_sample)
@@ -161,10 +136,26 @@ class TE_AC(object):
         gc.collect()
 
     def save(self, filename):
-        pass
+        torch.save(self.q_critic.state_dict(), filename + "_Q_critic_" + str(datetime.datetime.now()))
+        torch.save(self.q_critic_optimizer.state_dict(), filename + "_Q_critic_optimizer_" + str(datetime.datetime.now()))
+
+        torch.save(self.t_critic.state_dict(), filename + "_T_critic_" + str(datetime.datetime.now()))
+        torch.save(self.t_critic_optimizer.state_dict(), filename + "_T_critic_optimizer_" + str(datetime.datetime.now()))
+
+        torch.save(self.actor.state_dict(), filename + "_actor_" + str(datetime.datetime.now()))
+        torch.save(self.actor_optimizer.state_dict(), filename + "_actor_optimizer_" + str(datetime.datetime.now()))
+
 
     def load(self, filename):
-        pass
+        self.q_critic.load_state_dict(torch.load(filename + "_Q_critic"))
+        self.q_critic_optimizer.load_state_dict(torch.load(filename + "_Q_critic_optimizer"))
+
+        self.t_critic.load_state_dict(torch.load(filename + "_T_critic"))
+        self.t_critic_optimizer.load_state_dict(torch.load(filename + "_T_critic_optimizer"))
+
+        self.actor.load_state_dict(torch.load(filename + "_actor"))
+        self.actor_optimizer.load_state_dict(torch.load(filename + "_actor_optimizer"))
+
 
 def main():
 
@@ -192,7 +183,6 @@ def main():
                 break
 
         agent.train(episode)
-        writer.add_scalar('time', t, i_episode)
         writer.add_scalar('reward', total_reward, i_episode)
 
     print("<<=== Finish ===>>")
