@@ -4,6 +4,38 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class Actor_RAM(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_size=512):
+        super(Actor_RAM, self).__init__()
+
+        self.l1 = nn.Linear(state_dim, hidden_size)
+        self.l2 = nn.Linear(hidden_size, hidden_size)
+        self.l3 = nn.Linear(hidden_size, action_dim)
+
+
+    def forward(self, state):
+        a = F.relu(self.l1(state))
+        a = F.relu(self.l2(a))
+        return F.softmax(self.l3(a), dim=-1)
+
+
+class Critic_RAM(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_size=512):
+        super(Critic_RAM, self).__init__()
+
+        self.l1 = nn.Linear(state_dim + action_dim, hidden_size)
+        self.l2 = nn.Linear(hidden_size, hidden_size)
+        self.l3 = nn.Linear(hidden_size, 1)
+
+    def forward(self, state, action):
+        sa = torch.cat([state, action], 1)
+
+        q = F.relu(self.l1(sa))
+        q = F.relu(self.l2(q1))
+        q = self.l3(q1)
+        return q
+    
+    
 class Atari_ConvNet(nn.Module):
     
     def __init__(self, in_channels:int, action_space:int, net_type:str):
