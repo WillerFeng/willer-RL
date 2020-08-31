@@ -65,53 +65,9 @@ class Critic(nn.Module):
         q1 = self.l3(q1)
         return q1
 
+
 # ============================================================================
-    
-class ConvActor(nn.Module):
-    def __init__(self, in_channels, aciton_space):
-        super(ConvActor, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
-        self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(64         , 64, kernel_size=3, stride=1)
-                   
-        self.fc_action1 = nn.Linear(7 * 7 * 64, 512)
-        self.fc_action2 = nn.Linear(512, action_space)
-        
-    def forward(self, x):
-        
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = x.view(x.size(0), -1)
-        
-        action = F.relu(self.fc_action1(x))
-        action = F.softmax(self.fc_action2(action), dim=-1)
-        return action 
-        
-        
-class ConvCritic(nn.Module):
-    def __init__(self, in_channels, aciton_space):
-        super(ConvActor, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
-        self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(64         , 64, kernel_size=3, stride=1)
-                   
-        self.fc_value1 = nn.Linear(7 * 7 * 64, 512)
-        self.fc_value2 = nn.Linear(512, 1)
-        
-    def forward(self, x):
-        
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = x.view(x.size(0), -1)
-        
-        value = F.relu(self.fc_value1(x))
-        value = self.fc_value2(value)
-        return value
-    
-# ============================================================================
-    
+
 class TD3(object):
     def __init__(
         self,
@@ -151,7 +107,7 @@ class TD3(object):
     def train(self, replay_buffer, batch_size=100):
         self.total_it += 1
 
-        # Sample replay buffer 
+        # Sample replay buffer
         state, action, next_state, reward, not_done = replay_buffer.sample(batch_size)
 
         with torch.no_grad():
@@ -186,7 +142,7 @@ class TD3(object):
             # Compute actor losse
             actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
 
-            # Optimize the actor 
+            # Optimize the actor
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
             self.actor_optimizer.step()

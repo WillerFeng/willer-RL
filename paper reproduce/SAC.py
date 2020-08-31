@@ -1,211 +1,300 @@
-import copy
-import datetime
+import argparse
+import pickle
+from collections import namedtuple
+from itertools import count
+
+import os
 import numpy as np
+
+import gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
+from torch.distributions import Normal
+from torch.autograd import grad
+from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
+from tensorboardX import SummaryWriter
 
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+parser = argparse.ArgumentParser()
+
+
+parser.add_argument("--env_name", default="Pendulum-v0")  # OpenAI gym environment name
+parser.add_argument('--tau',  default=0.005, type=float) # target smoothing coefficient
+parser.add_argument('--target_update_interval', default=1, type=int)
+parser.add_argument('--gradient_steps', default=1, type=int)
+
+
+parser.add_argument('--learning_rate', default=3e-4, type=int)
+parser.add_argument('--gamma', default=0.99, type=int) # discount gamma
+parser.add_argument('--capacity', default=10000, type=int) # replay buffer size
+parser.add_argument('--iteration', default=100000, type=int) #  num of  games
+parser.add_argument('--batch_size', default=128, type=int) # mini batch size
+parser.add_argument('--seed', default=1, type=int)
+
+# optional parameters
+parser.add_argument('--num_hidden_layers', default=2, type=int)
+parser.add_argument('--num_hidden_units_per_layer', default=256, type=int)
+parser.add_argument('--sample_frequency', default=256, type=int)
+parser.add_argument('--activation', default='Relu', type=str)
+parser.add_argument('--render', default=False, type=bool) # show UI or not
+parser.add_argument('--log_interval', default=2000, type=int) #
+parser.add_argument('--load', default=False, type=bool) # load model
+args = parser.parse_args()
+
+class NormalizedActions(gym.ActionWrapper):
+    def _action(self, action):
+        low = self.action_space.low
+        high = self.action_space.high
+
+        action = low + (action + 1.0) * 0.5 * (high - low)
+        action = np.clip(action, low, high)
+
+        return action
+
+    def _reverse_action(self, action):
+        low = self.action_space.low
+        high = self.action_space.high
+
+        action = 2 * (action - low) / (high - low) - 1
+        action = np.clip(action, low, high)
+
+        return action
+
+
+env = NormalizedActions(gym.make(args.env_name))
+
+# Set seeds
+env.seed(args.seed)
+torch.manual_seed(args.seed)
+np.random.seed(args.seed)
+
+state_dim = env.observation_space.shape[0]
+action_dim = env.action_space.shape[0]
+max_action = float(env.action_space.high[0])
+min_Val = torch.tensor(1e-7).float()
+Transition = namedtuple('Transition', ['s', 'a', 'r', 's_', 'd'])
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, min_log_std=-20, max_log_std=2):
         super(Actor, self).__init__()
+        self.fc1 = nn.Linear(state_dim, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.mu_head = nn.Linear(256, 1)
+        self.log_std_head = nn.Linear(256, 1)
+        self.max_action = max_action
 
-        self.l1 = nn.Linear(state_dim, 256)
-        self.l2 = nn.Linear(256, 256)
-        self.l3 = nn.Linear(256, action_dim)
+        self.min_log_std = min_log_std
+        self.max_log_std = max_log_std
 
-
-    def forward(self, state):
-        a = F.relu(self.l1(state))
-        a = F.relu(self.l2(a))
-        return torch.tanh(self.l3(a))
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        mu = self.mu_head(x)
+        log_std_head = F.relu(self.log_std_head(x))
+        log_std_head = torch.clamp(log_std_head, self.min_log_std, self.max_log_std)
+        return mu, log_std_head
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim):
         super(Critic, self).__init__()
+        self.fc1 = nn.Linear(state_dim, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc3 = nn.Linear(256, 1)
 
-        # Q1 architecture
-        self.l1 = nn.Linear(state_dim + action_dim, 256)
-        self.l2 = nn.Linear(256, 256)
-        self.l3 = nn.Linear(256, 1)
-
-        # Q2 architecture
-        self.l4 = nn.Linear(state_dim + action_dim, 256)
-        self.l5 = nn.Linear(256, 256)
-        self.l6 = nn.Linear(256, 1)
-
-
-    def forward(self, state, action):
-        sa = torch.cat([state, action], 1)
-
-        q1 = F.relu(self.l1(sa))
-        q1 = F.relu(self.l2(q1))
-        q1 = self.l3(q1)
-
-        q2 = F.relu(self.l4(sa))
-        q2 = F.relu(self.l5(q2))
-        q2 = self.l6(q2)
-        return q1, q2
-
-
-    def Q1(self, state, action):
-        sa = torch.cat([state, action], 1)
-
-        q1 = F.relu(self.l1(sa))
-        q1 = F.relu(self.l2(q1))
-        q1 = self.l3(q1)
-        return q1
-
-# ============================================================================
-    
-class ConvActor(nn.Module):
-    def __init__(self, in_channels, aciton_space):
-        super(ConvActor, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
-        self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(64         , 64, kernel_size=3, stride=1)
-                   
-        self.fc_action1 = nn.Linear(7 * 7 * 64, 512)
-        self.fc_action2 = nn.Linear(512, action_space)
-        
     def forward(self, x):
-        
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = x.view(x.size(0), -1)
-        
-        action = F.relu(self.fc_action1(x))
-        action = F.softmax(self.fc_action2(action), dim=-1)
-        return action 
-        
-        
-class ConvCritic(nn.Module):
-    def __init__(self, in_channels, aciton_space):
-        super(ConvActor, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
-        self.conv2 = nn.Conv2d(32         , 64, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(64         , 64, kernel_size=3, stride=1)
-                   
-        self.fc_value1 = nn.Linear(7 * 7 * 64, 512)
-        self.fc_value2 = nn.Linear(512, 1)
-        
-    def forward(self, x):
-        
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = x.view(x.size(0), -1)
-        
-        value = F.relu(self.fc_value1(x))
-        value = self.fc_value2(value)
-        return value
-    
-    
-class SAC:
-    def __init__(
-        self,
-        state_dim,
-        action_dim,
-        max_action,
-        discount=0.99,
-        tau=0.005,
-        policy_noise=0.2,
-        noise_clip=0.5,
-        policy_freq=2
-        ):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        self.actor = Actor(state_dim, action_dim, max_action).to(device)
-        self.actor_target = copy.deepcopy(self.actor)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
 
-        self.critic = Critic(state_dim, action_dim).to(device)
-        self.critic_target = copy.deepcopy(self.critic)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
+class Q(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Q, self).__init__()
+        self.fc1 = nn.Linear(state_dim + action_dim, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc3 = nn.Linear(256, 1)
 
-        self.max_action = max_action
-        self.discount = discount
-        self.tau = tau
-        self.policy_noise = policy_noise
-        self.noise_clip = noise_clip
-        self.policy_freq = policy_freq
+    def forward(self, s, a):
+        s = s.reshape(-1, state_dim)
+        a = a.reshape(-1, action_dim)
+        x = torch.cat((s, a), -1) # combination s and a
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
-        self.total_it = 0
 
+class SAC():
+    def __init__(self):
+        super(SAC, self).__init__()
+
+        self.policy_net = Actor(state_dim).to(device)
+        self.value_net = Critic(state_dim).to(device)
+        self.Q_net = Q(state_dim, action_dim).to(device)
+        self.Target_value_net = Critic(state_dim).to(device)
+
+        self.replay_buffer = [Transition] * args.capacity
+        self.policy_optimizer = optim.Adam(self.policy_net.parameters(), lr=args.learning_rate)
+        self.value_optimizer = optim.Adam(self.value_net.parameters(), lr=args.learning_rate)
+        self.Q_optimizer = optim.Adam(self.Q_net.parameters(), lr=args.learning_rate)
+        self.num_transition = 0 # pointer of replay buffer
+        self.num_training = 1
+        self.writer = SummaryWriter('./exp-SAC')
+
+        self.value_criterion = nn.MSELoss()
+        self.Q_criterion = nn.MSELoss()
+
+        for target_param, param in zip(self.Target_value_net.parameters(), self.value_net.parameters()):
+            target_param.data.copy_(param.data)
+
+        os.makedirs('./SAC_model/', exist_ok=True)
 
     def select_action(self, state):
-        state = torch.FloatTensor(state.reshape(1, -1)).to(device)
-        return self.actor(state).cpu().data.numpy().flatten()
+        state = torch.FloatTensor(state).to(device)
+        mu, log_sigma = self.policy_net(state)
+        sigma = torch.exp(log_sigma)
+        dist = Normal(mu, sigma)
+        z = dist.sample()
+        action = torch.tanh(z).detach().cpu().numpy()
+        return action.item() # return a scalar, float32
+
+    def store(self, s, a, r, s_, d):
+        index = self.num_transition % args.capacity
+        transition = Transition(s, a, r, s_, d)
+        self.replay_buffer[index] = transition
+        self.num_transition += 1
+
+    def get_action_log_prob(self, state):
+
+        batch_mu, batch_log_sigma = self.policy_net(state)
+        batch_sigma = torch.exp(batch_log_sigma)
+        dist = Normal(batch_mu, batch_sigma)
+        z = dist.sample()
+        action = torch.tanh(z)
+        log_prob = dist.log_prob(z) - torch.log(1 - action.pow(2) + min_Val)
+        return action, log_prob, z, batch_mu, batch_log_sigma
 
 
-    def train(self, replay_buffer, batch_size=100):
-        self.total_it += 1
+    def update(self):
+        if self.num_training % 500 == 0:
+            print("Training ... {} ".format(self.num_training))
+        s = torch.tensor([t.s for t in self.replay_buffer]).float().to(device)
+        a = torch.tensor([t.a for t in self.replay_buffer]).to(device)
+        r = torch.tensor([t.r for t in self.replay_buffer]).to(device)
+        s_ = torch.tensor([t.s_ for t in self.replay_buffer]).float().to(device)
+        d = torch.tensor([t.d for t in self.replay_buffer]).float().to(device)
 
-        # Sample replay buffer 
-        state, action, next_state, reward, not_done = replay_buffer.sample(batch_size)
-
-        with torch.no_grad():
-            # Select action according to policy and add clipped noise
-            noise = (
-                torch.randn_like(action) * self.policy_noise
-            ).clamp(-self.noise_clip, self.noise_clip)
-
-            next_action = (
-                self.actor_target(next_state) + noise
-            ).clamp(-self.max_action, self.max_action)
-
-            # Compute the target Q value
-            target_Q1, target_Q2 = self.critic_target(next_state, next_action)
-            target_Q = torch.min(target_Q1, target_Q2)
-            target_Q = reward + not_done * self.discount * target_Q
-
-        # Get current Q estimates
-        current_Q1, current_Q2 = self.critic(state, action)
-
-        # Compute critic loss
-        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
-
-        # Optimize the critic
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
-
-        # Delayed policy updates
-        if self.total_it % self.policy_freq == 0:
-
-            # Compute actor losse
-            actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
-
-            # Optimize the actor 
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            self.actor_optimizer.step()
-
-            # Update the frozen target models
-            for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-            for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
-                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        for _ in range(args.gradient_steps):
+            #for index in BatchSampler(SubsetRandomSampler(range(args.capacity)), args.batch_size, False):
+            index = np.random.choice(range(args.capacity), args.batch_size, replace=False)
+            bn_s = s[index]
+            bn_a = a[index].reshape(-1, 1)
+            bn_r = r[index].reshape(-1, 1)
+            bn_s_ = s_[index]
+            bn_d = d[index].reshape(-1, 1)
 
 
-    def save(self, filename):
-        torch.save(self.critic.state_dict(), filename + "_critic_" + str(datetime.datetime.now()))
-        torch.save(self.critic_optimizer.state_dict(), filename + "_critic_optimizer_" + str(datetime.datetime.now()))
+            target_value = self.Target_value_net(bn_s_)
+            next_q_value = bn_r + (1 - bn_d) * args.gamma * target_value
 
-        torch.save(self.actor.state_dict(), filename + "_actor_" + str(datetime.datetime.now()))
-        torch.save(self.actor_optimizer.state_dict(), filename + "_actor_optimizer_" + str(datetime.datetime.now()))
+            excepted_value = self.value_net(bn_s)
+            excepted_Q = self.Q_net(bn_s, bn_a)
+
+            sample_action, log_prob, z, batch_mu, batch_log_sigma = self.get_action_log_prob(bn_s)
+            excepted_new_Q = self.Q_net(bn_s, sample_action)
+            next_value = excepted_new_Q - log_prob
+
+            # !!!Note that the actions are sampled according to the current policy,
+            # instead of replay buffer. (From original paper)
+
+            V_loss = self.value_criterion(excepted_value, next_value.detach())  # J_V
+            V_loss = V_loss.mean()
+
+            # Single Q_net this is different from original paper!!!
+            Q_loss = self.Q_criterion(excepted_Q, next_q_value.detach()) # J_Q
+            Q_loss = Q_loss.mean()
+
+            log_policy_target = excepted_new_Q - excepted_value
+
+            pi_loss = log_prob * (log_prob- log_policy_target).detach()
+            pi_loss = pi_loss.mean()
+
+            self.writer.add_scalar('Loss/V_loss', V_loss, global_step=self.num_training)
+            self.writer.add_scalar('Loss/Q_loss', Q_loss, global_step=self.num_training)
+            self.writer.add_scalar('Loss/pi_loss', pi_loss, global_step=self.num_training)
+            # mini batch gradient descent
+            self.value_optimizer.zero_grad()
+            V_loss.backward(retain_graph=True)
+            nn.utils.clip_grad_norm_(self.value_net.parameters(), 0.5)
+            self.value_optimizer.step()
+
+            self.Q_optimizer.zero_grad()
+            Q_loss.backward(retain_graph = True)
+            nn.utils.clip_grad_norm_(self.Q_net.parameters(), 0.5)
+            self.Q_optimizer.step()
+
+            self.policy_optimizer.zero_grad()
+            pi_loss.backward(retain_graph = True)
+            nn.utils.clip_grad_norm_(self.policy_net.parameters(), 0.5)
+            self.policy_optimizer.step()
+
+            # soft update
+            for target_param, param in zip(self.Target_value_net.parameters(), self.value_net.parameters()):
+                target_param.data.copy_(target_param * (1 - args.tau) + param * args.tau)
+
+            self.num_training += 1
+
+    def save(self):
+        torch.save(self.policy_net.state_dict(), './SAC_model/policy_net.pth')
+        torch.save(self.value_net.state_dict(), './SAC_model/value_net.pth')
+        torch.save(self.Q_net.state_dict(), './SAC_model/Q_net.pth')
+        print("====================================")
+        print("Model has been saved...")
+        print("====================================")
+
+    def load(self):
+        torch.load(self.policy_net.state_dict(), './SAC_model/policy_net.pth')
+        torch.load(self.value_net.state_dict(), './SAC_model/value_net.pth')
+        torch.load(self.Q_net.state_dict(), './SAC_model/Q_net.pth')
+        print()
+
+def main():
+
+    agent = SAC()
+    if args.load: agent.load()
+    if args.render: env.render()
+    print("====================================")
+    print("Collection Experience...")
+    print("====================================")
+
+    ep_r = 0
+    for i in range(args.iteration):
+        state = env.reset()
+        for t in range(200):
+            action = agent.select_action(state)
+            next_state, reward, done, info = env.step(np.float32(action))
+            ep_r += reward
+            if args.render: env.render()
+            agent.store(state, action, reward, next_state, done)
+
+            if agent.num_transition >= args.capacity:
+                agent.update()
+
+            state = next_state
+            if done or t == 199:
+                if i % 10 == 0:
+                    print("Ep_i {}, the ep_r is {}, the t is {}".format(i, ep_r, t))
+                break
+        if i % args.log_interval == 0:
+            agent.save()
+        agent.writer.add_scalar('ep_r', ep_r, global_step=i)
+        ep_r = 0
 
 
-    def load(self, filename):
-        self.critic.load_state_dict(torch.load(filename + "_critic"))
-        self.critic_optimizer.load_state_dict(torch.load(filename + "_critic_optimizer"))
-        self.critic_target = copy.deepcopy(self.critic)
-
-        self.actor.load_state_dict(torch.load(filename + "_actor"))
-        self.actor_optimizer.load_state_dict(torch.load(filename + "_actor_optimizer"))
-        self.actor_target = copy.deepcopy(self.actor)
+if __name__ == '__main__':
+    main()
