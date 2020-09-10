@@ -31,8 +31,8 @@ class Critic_RAM(nn.Module):
         sa = torch.cat([state, action], 1)
 
         q = F.relu(self.l1(sa))
-        q = F.relu(self.l2(q1))
-        q = self.l3(q1)
+        q = F.relu(self.l2(q))
+        q = self.l3(q)
         return q
     
     
