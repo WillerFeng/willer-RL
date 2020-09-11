@@ -157,7 +157,7 @@ class TE_AC(object):
             target_q = self.q_critic(next_state, action_sample)
             target_t = self.t_critic(next_state, action_sample)
             term_prob = self.t_prob(next_state, action_sample)
-            target_value = reward + self.discount * ((torch.FloatTensor(1).to(self.device) - term_prob) * target_q + term_prob * target_t)
+            target_value = reward + self.discount * (torch.ones_like(origin_reward).to(self.device) - term_prob) * target_q + term_prob * target_t
             
         q_critic_loss = F.mse_loss(target_value, self.q_critic(state, action))
         self.q_critic_optimizer.zero_grad()

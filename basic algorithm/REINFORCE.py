@@ -35,6 +35,7 @@ class REINFORCE(object):
         weight_decay=1e-4
         ):
 
+        self.writer = SummaryWriter("runs/REINFORCE_"+ env_name + "_" +str(datetime.datetime.now()))
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.actor = net.Actor_RAM(state_dim, action_dim).to(self.device)
@@ -52,17 +53,21 @@ class REINFORCE(object):
         return action.item(), m.log_prob(action)
 
     
-    def train(self, episode, reward):
+    def train(self, episode):
         self.total_it += 1
         
-        log_action = torch.stack(episode)
+        reward, log_action = zip(*episode)
+        
+        reward = utils.reward_shape(np.array(reward), self.discount)
         reward = torch.FloatTensor(reward).to(self.device)
-
+        log_action = torch.stack(log_action)
+        
         actor_loss = -(log_action * reward).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
         
+        self.writer.add_scalar('actor_loss', actor_loss, self.total_it)
         gc.collect()
 
     def save(self, filename):
@@ -73,13 +78,13 @@ class REINFORCE(object):
         self.actor.load_state_dict(torch.load(filename + "_actor"))
         self.actor_optimizer.load_state_dict(torch.load(filename + "_actor_optimizer"))
 
-def main():
-    episodes  = 2000
+    
+if __name__ == '__main__':
+    
+    episodes  = 600
     threshold = 1000
     
-    writer = SummaryWriter("runs/REINFORCE_"+ env_name + "_" +str(datetime.datetime.now()))
     agent = REINFORCE(state_space, action_space)
-    
     print("<<=== Begin Train ===>>")
     for i_episode in range(episodes):
 
@@ -91,15 +96,13 @@ def main():
             action, log_action = agent.select_action(state)
             next_state, reward, done, info = env.step(action)
             
-            episode.append(log_action)
+            episode.append([reward, log_action])
             state = next_state
             total_reward += reward
             if done or t >= threshold:
                 break
               
-        agent.train(episode, [total_reward]*len(episode))
-        writer.add_scalar('reward', total_reward, i_episode)
+        agent.train(episode)
+        agent.writer.add_scalar('reward', total_reward, i_episode)
 
     print("<<=== Finish ===>>")
-if __name__ == '__main__':
-    main()
